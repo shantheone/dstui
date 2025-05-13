@@ -7,7 +7,11 @@ edition = "2024"
 ratatui = "0.29.0"
 crossterm = { version = "0.29.0", features = ["event-stream"] }
 futures = "0.3.31"
-reqwest = { version = "*", features = ["json", "cookies", "cookie_store"] }
+reqwest = { version = "0.11.27", features = [
+  "json",
+  "cookies",
+  "cookie_store",
+] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["full"] }

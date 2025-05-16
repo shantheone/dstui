@@ -22,6 +22,7 @@ pub struct App {
     should_exit: bool,
     show_help: bool,
     show_server_info: bool,
+    show_add_task: bool,
     loading: bool,
     table_state: TableState,
     items: Vec<DownloadTask>,
@@ -38,6 +39,7 @@ impl App {
             should_exit: false,
             show_help: false,
             show_server_info: false,
+            show_add_task: false,
             loading: false,
             table_state: TableState::default(),
             items: vec![],
@@ -97,7 +99,7 @@ impl App {
 
         // Initial load & draw
         self.loading = true;
-        terminal.draw(|f| self.draw(f))?;
+        terminal.draw(|f| self.draw(f, self.show_add_task))?;
         self.load_tasks(client).await;
         self.loading = false;
 
@@ -109,7 +111,7 @@ impl App {
             }
         };
 
-        terminal.draw(|f| self.draw(f))?;
+        terminal.draw(|f| self.draw(f, self.show_add_task))?;
 
         // Main app loop for actions that require data refresh
         loop {
@@ -117,44 +119,54 @@ impl App {
                 // Auto-refresh arm
                 _ = refresher.tick() => {
                     self.loading = true;
-                    terminal.draw(|f| self.draw(f))?;
+                    terminal.draw(|f| self.draw(f, self.show_add_task))?;
                     self.load_tasks(client).await;
                     self.loading = false;
                     // redraw right away
-                    terminal.draw(|f| self.draw(f))?;
+                    terminal.draw(|f| self.draw(f, self.show_add_task))?;
                 },
 
                 // User input arm
                 maybe_event = events.next() => {
                     if let Some(Ok(Event::Key(key))) = maybe_event {
                         // If help, server-info or error_popup panel is up, only allow <q> to close it
-                        if self.show_help || self.show_server_info || self.error_popup.is_some() {
+                        if self.show_help || self.show_server_info || self.show_add_task || self.error_popup.is_some() {
                             if let KeyCode::Char('q') = key.code {
                                 // close whichever is open
                                 self.show_help = false;
                                 self.show_server_info = false;
                                 self.error_popup = None;
                             }
+                            if let KeyCode::Esc = key.code {
+                                self.show_add_task = false;
+                            }
                             // Redraw (so the overlay goes away) but do nothing else
-                            terminal.draw(|f| self.draw(f))?;
+                            terminal.draw(|f| self.draw(f, self.show_add_task))?;
                             continue;
                         }
+
 
                         // Otherwise handle normal keys:
                         match key.code {
                             KeyCode::Char('r') => {
                                 // Manual refresh
                                 self.loading = true;
-                                terminal.draw(|f| self.draw(f))?;
+                                terminal.draw(|f| self.draw(f, self.show_add_task))?;
                                 self.load_tasks(client).await;
                                 self.loading = false;
+                            }
+                            // Show add URL popup
+                            KeyCode::Char('a') => {
+                                terminal.draw(|f| self.draw(f, self.show_add_task))?;
+                                self.show_add_task = true;
+                                self.handle_add_task_key_event(key);
                             }
                             // Pause Task
                             KeyCode::Char('p') => {
                                 if let Some(idx) = self.table_state.selected() {
                                     let id = &self.items[idx].id;
                                     self.loading = true;
-                                    terminal.draw(|f| self.draw(f))?;
+                                    terminal.draw(|f| self.draw(f, self.show_add_task))?;
 
                                     // Decide if currently paused -> resume, else pause
                                     let is_paused = self.items[idx].status.label() == "paused";
@@ -177,7 +189,7 @@ impl App {
                                     // Refresh list after the action
                                     self.load_tasks(client).await;
                                     self.loading = false;
-                                    terminal.draw(|f| self.draw(f))?;
+                                    terminal.draw(|f| self.draw(f, self.show_add_task))?;
                                 }
                             }
 
@@ -186,7 +198,7 @@ impl App {
                                 if let Some(idx) = self.table_state.selected() {
                                     let id = &self.items[idx].id;
                                     self.loading = true;
-                                    terminal.draw(|f| self.draw(f))?;
+                                    terminal.draw(|f| self.draw(f, self.show_add_task))?;
 
                                     let result = client.delete_task(id).await;
 
@@ -202,7 +214,7 @@ impl App {
                                     // Refresh list after the action
                                     self.load_tasks(client).await;
                                     self.loading = false;
-                                    terminal.draw(|f| self.draw(f))?;
+                                    terminal.draw(|f| self.draw(f, self.show_add_task))?;
                                 }
 
                             }
@@ -219,11 +231,11 @@ impl App {
                                     }
                                 }
                             }
-
+                            // Pass all other keypresses to handle_key_event
                             _ => self.handle_key_event(key),
                         }
                         // Always redraw after handling a key
-                        terminal.draw(|f| self.draw(f))?;
+                        terminal.draw(|f| self.draw(f, self.show_add_task))?;
                     }
                 },
             }
@@ -237,7 +249,18 @@ impl App {
         Ok(())
     }
 
-    fn draw(&self, frame: &mut Frame) {
+    fn draw(&self, frame: &mut Frame, show_cursor: bool) {
+        if show_cursor {
+            let raw_w = frame.area().width.saturating_mul(60) / 100;
+            let w = raw_w.max(3).min(frame.area().width);
+            let x = frame.area().x + (frame.area().width.saturating_sub(w)) / 2;
+
+            let raw_h = frame.area().height.saturating_mul(5) / 100;
+            let h = raw_h.max(3).min(frame.area().height);
+            let y = frame.area().y + (frame.area().height.saturating_sub(h)) / 2;
+
+            frame.set_cursor_position((x + 1, y + 1));
+        }
         frame.render_widget(self, frame.area());
     }
 
@@ -275,6 +298,19 @@ impl App {
             // Show help screen
             KeyCode::Char('?') => self.show_help = true,
             // Drop every other keypresses
+            _ => {}
+        }
+    }
+
+    // Handle every other keypresses, these are not interfering with the data refresh
+    fn handle_add_task_key_event(&mut self, key_event: KeyEvent) {
+        match key_event.code {
+            KeyCode::Enter => {
+                self.show_add_task = false;
+            }
+            KeyCode::Up => {
+                println!("up!");
+            }
             _ => {}
         }
     }
@@ -761,6 +797,26 @@ impl Widget for &App {
                 // Then render the server info paragraph
                 server_info.render(popup_area, buf);
             }
+        }
+
+        // Add task popup
+        if self.show_add_task {
+            let popup_area = centered_rect(60, 5, area);
+            let block = Block::bordered()
+                .title(" Add URL and press <Enter>... ")
+                .border_set(border::THICK)
+                .title_bottom(
+                    Line::from(" ...or close this panel with <ESC> ").alignment(Alignment::Center),
+                );
+
+            let paragraph = Paragraph::new(Line::from("")).block(block);
+            // Clear background
+            for y in popup_area.top()..popup_area.bottom() {
+                for x in popup_area.left()..popup_area.right() {
+                    buf[(x, y)].set_char(' ').set_bg(Color::Black);
+                }
+            }
+            paragraph.render(popup_area, buf);
         }
 
         // Error popup

@@ -95,8 +95,8 @@ impl App {
         let clipboard_text = get_clipboard();
         // Validate if it's a URL
         match validate_url(&clipboard_text) {
-            Ok(_) => match client.create_task_from_url(&clipboard_text).await {
-                Ok(_) => self.load_tasks(client).await,
+            Ok(()) => match client.create_task_from_url(&clipboard_text).await {
+                Ok(()) => self.load_tasks(client).await,
                 Err(e) => self.error_popup = Some(format!("Failed to add task: {}", e)),
             },
 

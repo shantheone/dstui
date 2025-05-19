@@ -1,5 +1,6 @@
 /// Collection of small utilities used all over the place
 use chrono::{DateTime, Utc};
+use clipboard_rs::{self, Clipboard};
 use humantime::format_duration;
 use std::time::Duration;
 
@@ -69,6 +70,30 @@ pub fn render_progress_bar(percentage: u64) -> String {
     }
 
     format!("[{}]", bar)
+}
+
+// Get text from clipboard
+pub fn get_clipboard() -> String {
+    let ctx = clipboard_rs::ClipboardContext::new().unwrap();
+    ctx.get_text().unwrap_or("".to_string())
+}
+
+// Validate if the URL from the clipboard is OK
+pub fn validate_url(url: &str) -> Result<(), String> {
+    if url.starts_with("http://")
+        || url.starts_with("https://")
+        || url.starts_with("ftp://")
+        || url.starts_with("ftps://")
+        || url.starts_with("sftp://")
+        || url.starts_with("magnet:")
+        || url.starts_with("thunder://")
+        || url.starts_with("flashget://")
+        || url.starts_with("qqdl://")
+    {
+        Ok(())
+    } else {
+        Err(format!("Invalid URL: {}", url))
+    }
 }
 
 // Half-assed attempt on testing

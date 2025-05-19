@@ -87,6 +87,67 @@ impl std::fmt::Display for AuthError {
 impl std::error::Error for AuthError {}
 // Authentication errors
 
+// Task errors
+#[derive(Debug)]
+pub enum TaskError {
+    FileUploadFailed,        // 400
+    MaxNumberOfTasksReached, // 401
+    DestinationDenied,       // 402
+    DestinationDoesNotExist, // 403
+    InvalidTaskId,           // 404
+    InvalidTaskAction,       // 405
+    NoDefaultDestination,    // 406
+    SetDestinationFailed,    // 407
+    FileDoesNotExist,        // 408
+    Other(u32),              // Any other error code, not in documentation
+    ParseError,              // JSON parsing error or network error
+}
+
+impl TaskError {
+    pub fn from_code(code: u32) -> Self {
+        match code {
+            400 => TaskError::FileUploadFailed,
+            401 => TaskError::MaxNumberOfTasksReached,
+            402 => TaskError::DestinationDenied,
+            403 => TaskError::DestinationDoesNotExist,
+            404 => TaskError::InvalidTaskId,
+            405 => TaskError::InvalidTaskAction,
+            406 => TaskError::NoDefaultDestination,
+            407 => TaskError::SetDestinationFailed,
+            408 => TaskError::FileDoesNotExist,
+            other => TaskError::Other(other),
+        }
+    }
+
+    pub fn description(&self) -> &'static str {
+        match self {
+            TaskError::FileUploadFailed => "File upload failed",
+            TaskError::MaxNumberOfTasksReached => "Maximum number of tasks reached",
+            TaskError::DestinationDenied => "Destination denied",
+            TaskError::DestinationDoesNotExist => "Destination does not exist",
+            TaskError::InvalidTaskId => "Invalid task ID",
+            TaskError::InvalidTaskAction => "Invalid task action",
+            TaskError::NoDefaultDestination => "No default destination configured",
+            TaskError::SetDestinationFailed => "Setting destination failed",
+            TaskError::FileDoesNotExist => "File does not exist",
+            TaskError::Other(_) => "Unknown error",
+            TaskError::ParseError => "Failed to parse response",
+        }
+    }
+}
+
+impl std::fmt::Display for TaskError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            TaskError::Other(code) => write!(f, "{} (code {})", self.description(), code),
+            _ => write!(f, "{}", self.description()),
+        }
+    }
+}
+
+impl std::error::Error for TaskError {}
+// Task errors
+
 #[derive(Debug, Deserialize)]
 pub struct ConfigData {
     pub bt_max_download: u64,
@@ -224,6 +285,12 @@ pub struct TaskActionResponseWrapper {
     pub success: bool,
     pub data: Option<Vec<TaskActionResponse>>,
     pub error: Option<SynologyError>,
+}
+
+#[derive(Debug)]
+pub struct CreateTaskResponseWrapper {
+    pub success: bool,
+    pub error: Option<TaskError>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -672,6 +739,55 @@ impl SynologyClient {
 
         // Everything OK
         Ok(())
+    }
+
+    // Add task from URL
+    pub async fn create_task_from_url(&self, uri: &str) -> Result<(), TaskError> {
+        // Build URL & parameters, early‐return on missing API info or SID
+        let api = "SYNO.DownloadStation.Task";
+        let endpoint = self.api_url(api).ok_or(TaskError::ParseError)?; // missing API info is unexpected here
+        let version = self
+            .api_version(api)
+            .ok_or(TaskError::ParseError)?
+            .to_string();
+
+        let sid = self.sid.as_ref().ok_or(TaskError::ParseError)?;
+        let params = [
+            ("api", api),
+            ("version", &version),
+            ("method", "create"),
+            ("uri", uri),
+            ("_sid", sid),
+        ];
+
+        let resp = self
+            .http
+            .get(&endpoint)
+            .query(&params)
+            .send()
+            .await
+            .map_err(|_| TaskError::ParseError)?;
+        let text = resp.text().await.map_err(|_| TaskError::ParseError)?;
+
+        #[derive(serde::Deserialize)]
+        struct RawResponse {
+            success: bool,
+            error: Option<ErrorObj>,
+        }
+        #[derive(serde::Deserialize)]
+        struct ErrorObj {
+            code: u32,
+        }
+
+        let parsed: RawResponse = serde_json::from_str(&text).map_err(|_| TaskError::ParseError)?;
+
+        if parsed.success {
+            Ok(())
+        } else if let Some(err) = parsed.error {
+            Err(TaskError::from_code(err.code))
+        } else {
+            Err(TaskError::ParseError)
+        }
     }
 }
 

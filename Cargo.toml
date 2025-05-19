@@ -1,6 +1,6 @@
 [package]
 name = "dstui"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 
 [dependencies]
@@ -19,3 +19,4 @@ humantime = "2.2.0"
 chrono = { version = "0.4.40", features = ["serde"] }
 dirs = "6.0.0"
 toml = "0.8.22"
+clipboard-rs = "0.2.4"

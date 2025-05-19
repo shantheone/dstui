@@ -2,7 +2,10 @@ use crate::api::{ConfigData, DownloadTask, SynologyClient};
 use crate::config;
 use crate::config::AppConfig;
 use crate::ui::centered_rect;
-use crate::util::{calculate_elapsed_time, format_bytes, format_seconds, format_timestamp};
+use crate::util::{
+    calculate_elapsed_time, format_bytes, format_seconds, format_timestamp, get_clipboard,
+    validate_url,
+};
 use crossterm::event::{Event, EventStream, KeyCode, KeyEvent};
 use futures::StreamExt;
 use ratatui::{
@@ -22,7 +25,7 @@ pub struct App {
     should_exit: bool,
     show_help: bool,
     show_server_info: bool,
-    show_add_task: bool,
+    show_add_task_from_url: bool,
     loading: bool,
     table_state: TableState,
     items: Vec<DownloadTask>,
@@ -39,7 +42,7 @@ impl App {
             should_exit: false,
             show_help: false,
             show_server_info: false,
-            show_add_task: false,
+            show_add_task_from_url: false,
             loading: false,
             table_state: TableState::default(),
             items: vec![],
@@ -86,6 +89,21 @@ impl App {
         }
     }
 
+    // Add task from url
+    pub async fn add_task_from_url(&mut self, client: &mut SynologyClient) {
+        // Get text content of clipboard
+        let clipboard_text = get_clipboard();
+        // Validate if it's a URL
+        match validate_url(&clipboard_text) {
+            Ok(_) => match client.create_task_from_url(&clipboard_text).await {
+                Ok(_) => self.load_tasks(client).await,
+                Err(e) => self.error_popup = Some(format!("Failed to add task: {}", e)),
+            },
+
+            Err(e) => self.error_popup = Some(e),
+        }
+    }
+
     // Main app logic
     pub async fn run(
         &mut self,
@@ -99,7 +117,7 @@ impl App {
 
         // Initial load & draw
         self.loading = true;
-        terminal.draw(|f| self.draw(f, self.show_add_task))?;
+        terminal.draw(|f| self.draw(f))?;
         self.load_tasks(client).await;
         self.loading = false;
 
@@ -111,7 +129,7 @@ impl App {
             }
         };
 
-        terminal.draw(|f| self.draw(f, self.show_add_task))?;
+        terminal.draw(|f| self.draw(f))?;
 
         // Main app loop for actions that require data refresh
         loop {
@@ -119,29 +137,32 @@ impl App {
                 // Auto-refresh arm
                 _ = refresher.tick() => {
                     self.loading = true;
-                    terminal.draw(|f| self.draw(f, self.show_add_task))?;
+                    terminal.draw(|f| self.draw(f))?;
                     self.load_tasks(client).await;
                     self.loading = false;
                     // redraw right away
-                    terminal.draw(|f| self.draw(f, self.show_add_task))?;
+                    terminal.draw(|f| self.draw(f))?;
                 },
 
                 // User input arm
                 maybe_event = events.next() => {
                     if let Some(Ok(Event::Key(key))) = maybe_event {
                         // If help, server-info or error_popup panel is up, only allow <q> to close it
-                        if self.show_help || self.show_server_info || self.show_add_task || self.error_popup.is_some() {
+                        if self.show_help || self.show_server_info || self.show_add_task_from_url || self.error_popup.is_some() {
                             if let KeyCode::Char('q') = key.code {
                                 // close whichever is open
                                 self.show_help = false;
                                 self.show_server_info = false;
                                 self.error_popup = None;
+                                self.show_add_task_from_url = false;
                             }
-                            if let KeyCode::Esc = key.code {
-                                self.show_add_task = false;
+                            if let KeyCode::Enter = key.code {
+                                self.add_task_from_url(client).await;
+                                self.show_add_task_from_url = false;
+                                // TODO: add refresh after successful task addition
                             }
                             // Redraw (so the overlay goes away) but do nothing else
-                            terminal.draw(|f| self.draw(f, self.show_add_task))?;
+                            terminal.draw(|f| self.draw(f))?;
                             continue;
                         }
 
@@ -151,22 +172,21 @@ impl App {
                             KeyCode::Char('r') => {
                                 // Manual refresh
                                 self.loading = true;
-                                terminal.draw(|f| self.draw(f, self.show_add_task))?;
+                                terminal.draw(|f| self.draw(f))?;
                                 self.load_tasks(client).await;
                                 self.loading = false;
                             }
                             // Show add URL popup
                             KeyCode::Char('a') => {
-                                terminal.draw(|f| self.draw(f, self.show_add_task))?;
-                                self.show_add_task = true;
-                                self.handle_add_task_key_event(key);
+                                self.show_add_task_from_url = true;
+                                terminal.draw(|f| self.draw(f))?;
                             }
                             // Pause Task
                             KeyCode::Char('p') => {
                                 if let Some(idx) = self.table_state.selected() {
                                     let id = &self.items[idx].id;
                                     self.loading = true;
-                                    terminal.draw(|f| self.draw(f, self.show_add_task))?;
+                                    terminal.draw(|f| self.draw(f))?;
 
                                     // Decide if currently paused -> resume, else pause
                                     let is_paused = self.items[idx].status.label() == "paused";
@@ -189,7 +209,7 @@ impl App {
                                     // Refresh list after the action
                                     self.load_tasks(client).await;
                                     self.loading = false;
-                                    terminal.draw(|f| self.draw(f, self.show_add_task))?;
+                                    terminal.draw(|f| self.draw(f))?;
                                 }
                             }
 
@@ -198,7 +218,7 @@ impl App {
                                 if let Some(idx) = self.table_state.selected() {
                                     let id = &self.items[idx].id;
                                     self.loading = true;
-                                    terminal.draw(|f| self.draw(f, self.show_add_task))?;
+                                    terminal.draw(|f| self.draw(f))?;
 
                                     let result = client.delete_task(id).await;
 
@@ -214,7 +234,7 @@ impl App {
                                     // Refresh list after the action
                                     self.load_tasks(client).await;
                                     self.loading = false;
-                                    terminal.draw(|f| self.draw(f, self.show_add_task))?;
+                                    terminal.draw(|f| self.draw(f))?;
                                 }
 
                             }
@@ -235,7 +255,7 @@ impl App {
                             _ => self.handle_key_event(key),
                         }
                         // Always redraw after handling a key
-                        terminal.draw(|f| self.draw(f, self.show_add_task))?;
+                        terminal.draw(|f| self.draw(f))?;
                     }
                 },
             }
@@ -249,18 +269,7 @@ impl App {
         Ok(())
     }
 
-    fn draw(&self, frame: &mut Frame, show_cursor: bool) {
-        if show_cursor {
-            let raw_w = frame.area().width.saturating_mul(60) / 100;
-            let w = raw_w.max(3).min(frame.area().width);
-            let x = frame.area().x + (frame.area().width.saturating_sub(w)) / 2;
-
-            let raw_h = frame.area().height.saturating_mul(5) / 100;
-            let h = raw_h.max(3).min(frame.area().height);
-            let y = frame.area().y + (frame.area().height.saturating_sub(h)) / 2;
-
-            frame.set_cursor_position((x + 1, y + 1));
-        }
+    fn draw(&self, frame: &mut Frame) {
         frame.render_widget(self, frame.area());
     }
 
@@ -298,19 +307,6 @@ impl App {
             // Show help screen
             KeyCode::Char('?') => self.show_help = true,
             // Drop every other keypresses
-            _ => {}
-        }
-    }
-
-    // Handle every other keypresses, these are not interfering with the data refresh
-    fn handle_add_task_key_event(&mut self, key_event: KeyEvent) {
-        match key_event.code {
-            KeyCode::Enter => {
-                self.show_add_task = false;
-            }
-            KeyCode::Up => {
-                println!("up!");
-            }
             _ => {}
         }
     }
@@ -678,7 +674,7 @@ impl Widget for &App {
 
         // Help popup
         if self.show_help {
-            let popup_area = centered_rect(60, 60, area);
+            let popup_area = centered_rect(60, 40, area);
             let help_text = Text::from(vec![
                 Line::from(" Shortcuts:"),
                 Line::from(""),
@@ -689,6 +685,7 @@ impl Widget for &App {
                 Line::from("  r - Manually refresh tasks (default refresh is 60 seconds)"),
                 Line::from("  p - Pause/resume selected task"),
                 Line::from("  d - Delete selected task"),
+                Line::from("  a - Add URL from system clipboard"),
                 Line::from("  i - Show server info"),
                 Line::from("  q - Quit (or close this help)"),
                 Line::from("  ? - Show this help"),
@@ -719,7 +716,8 @@ impl Widget for &App {
 
         // Server info popup
         if self.show_server_info {
-            let popup_area = centered_rect(60, 60, area);
+            // TODO: Add scroll
+            let popup_area = centered_rect(60, 40, area);
             let server_config = self.load_config();
             let server_config_path = AppConfig::config_path()
                 .into_os_string()
@@ -800,16 +798,20 @@ impl Widget for &App {
         }
 
         // Add task popup
-        if self.show_add_task {
-            let popup_area = centered_rect(60, 5, area);
+        if self.show_add_task_from_url {
+            let popup_area = centered_rect(60, 40, area);
             let block = Block::bordered()
-                .title(" Add URL and press <Enter>... ")
+                .title(" URL copied, press <Enter> to add task... ")
                 .border_set(border::THICK)
                 .title_bottom(
-                    Line::from(" ...or close this panel with <ESC> ").alignment(Alignment::Center),
+                    Line::from(" ...or close this panel with <q> ").alignment(Alignment::Center),
                 );
 
-            let paragraph = Paragraph::new(Line::from("")).block(block);
+            let clipboard_text = get_clipboard();
+
+            let paragraph = Paragraph::new(Line::from(clipboard_text))
+                .block(block)
+                .wrap(ratatui::widgets::Wrap { trim: true });
             // Clear background
             for y in popup_area.top()..popup_area.bottom() {
                 for x in popup_area.left()..popup_area.right() {
@@ -821,7 +823,7 @@ impl Widget for &App {
 
         // Error popup
         if let Some(msg) = &self.error_popup {
-            let popup_area = centered_rect(60, 30, area);
+            let popup_area = centered_rect(50, 30, area);
             let block = Block::bordered()
                 .title(" Error ".bold().fg(Color::Red))
                 .border_set(border::THICK)

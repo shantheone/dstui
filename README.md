@@ -51,6 +51,8 @@ The color palette looks OK for me, but I use [wezterm](https://wezterm.org/) and
 
 # Possible future improvements
 - [ ] Adding tasks, right now this is not implemented
+  - [x] Add tasks from URL
+  - [ ] Add tasks from file (maybe as a command line argument)
 - [ ] Scrollable info window (mostly for the files tab)
 - [ ] Tests!
 - [ ] Hashing the password in the config file, so it's not stored in clear-text

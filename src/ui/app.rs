@@ -159,7 +159,6 @@ impl App {
                             if let KeyCode::Enter = key.code {
                                 self.add_task_from_url(client).await;
                                 self.show_add_task_from_url = false;
-                                // TODO: add refresh after successful task addition
                             }
                             // Redraw (so the overlay goes away) but do nothing else
                             terminal.draw(|f| self.draw(f))?;

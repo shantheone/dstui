@@ -104,6 +104,13 @@ impl App {
         }
     }
 
+    // Add task from command line argument
+    pub async fn add_task_from_file(&mut self, file_path: &str, client: &mut SynologyClient) {
+        if let Err(e) = client.create_task_from_file(file_path).await {
+            self.error_popup = Some(format!("Failed to add task: {}, {}", file_path, e));
+        }
+    }
+
     // Main app logic
     pub async fn run(
         &mut self,

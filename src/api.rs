@@ -1,8 +1,15 @@
 use crate::util::{format_bytes, render_progress_bar};
+use futures::TryStreamExt;
+use reqwest::multipart::{Form, Part};
 use reqwest::{Client, ClientBuilder, cookie::Jar};
 use serde::{Deserialize, Deserializer};
 use std::collections::HashMap;
+use std::path::Path;
 use std::sync::Arc;
+use std::time::Duration;
+use tokio::fs::File;
+use tokio::time::sleep;
+use tokio_util::codec::{BytesCodec, FramedRead};
 
 #[derive(Debug, Clone)]
 pub struct ApiInfo {
@@ -90,6 +97,7 @@ impl std::error::Error for AuthError {}
 // Task errors
 #[derive(Debug)]
 pub enum TaskError {
+    InvalidParameter,        // 101
     FileUploadFailed,        // 400
     MaxNumberOfTasksReached, // 401
     DestinationDenied,       // 402
@@ -106,6 +114,7 @@ pub enum TaskError {
 impl TaskError {
     pub fn from_code(code: u32) -> Self {
         match code {
+            101 => TaskError::InvalidParameter,
             400 => TaskError::FileUploadFailed,
             401 => TaskError::MaxNumberOfTasksReached,
             402 => TaskError::DestinationDenied,
@@ -121,6 +130,7 @@ impl TaskError {
 
     pub fn description(&self) -> &'static str {
         match self {
+            TaskError::InvalidParameter => "Invalid parameter",
             TaskError::FileUploadFailed => "File upload failed",
             TaskError::MaxNumberOfTasksReached => "Maximum number of tasks reached",
             TaskError::DestinationDenied => "Destination denied",
@@ -789,6 +799,145 @@ impl SynologyClient {
             Err(TaskError::ParseError)
         }
     }
+
+    pub async fn create_task_from_file(&self, file_path: &str) -> Result<(), TaskError> {
+        let api = "SYNO.DownloadStation.Task";
+        let endpoint = self.api_url(api).ok_or(TaskError::ParseError)?;
+        eprintln!("endpoint: {}", &endpoint);
+
+        let version = self
+            .api_version(api)
+            .ok_or(TaskError::ParseError)?
+            .to_string();
+        let sid = self.sid.as_ref().ok_or(TaskError::ParseError)?;
+
+        // 1) First, open the file and wrap it in a stream:
+        let file = File::open(file_path)
+            .await
+            .map_err(|_| TaskError::ParseError)?;
+        let stream = FramedRead::new(file, BytesCodec::new()).map_ok(|bytes| bytes.freeze());
+        let file_name = std::path::Path::new(file_path)
+            .file_name()
+            .and_then(|os| os.to_str())
+            .unwrap_or("upload.bin")
+            .to_string();
+
+        // 2) Build the multipart form: text first, then the file part last
+        let form = Form::new()
+            .text("api", api.to_string())
+            .text("version", version.clone())
+            .text("method", "create".to_string())
+            .text("_sid", sid.clone())
+            .part(
+                "file",
+                Part::stream(reqwest::Body::wrap_stream(stream))
+                    .file_name(file_name)
+                    .mime_str("application/octet-stream")
+                    .map_err(|_| TaskError::ParseError)?,
+            );
+
+        // 3) POST it
+        let resp = self
+            .http
+            .post(&endpoint)
+            .multipart(form)
+            .send()
+            .await
+            .map_err(|_| TaskError::ParseError)?;
+
+        // 4) Read + debug
+        let text = resp.text().await.map_err(|_| TaskError::ParseError)?;
+
+        // 5) Deserialize
+        #[derive(serde::Deserialize)]
+        struct RawResponse {
+            success: bool,
+            #[serde(default)]
+            error: Option<ErrorObj>,
+        }
+        #[derive(serde::Deserialize)]
+        struct ErrorObj {
+            code: u32,
+        }
+
+        let parsed: RawResponse = serde_json::from_str(&text).map_err(|e| {
+            eprintln!("JSON parse error: {}\nraw body: {}", e, text);
+            TaskError::ParseError
+        })?;
+
+        if parsed.success {
+            Ok(())
+        } else if let Some(err) = parsed.error {
+            Err(TaskError::from_code(err.code))
+        } else {
+            Err(TaskError::ParseError)
+        }
+    }
+    //
+    // pub async fn create_task_from_file(&self, file_path: &str) -> Result<(), TaskError> {
+    //     let api = "SYNO.DownloadStation.Task";
+    //     let endpoint = self.api_url(api).ok_or(TaskError::ParseError)?;
+    //     let version = self
+    //         .api_version(api)
+    //         .ok_or(TaskError::ParseError)?
+    //         .to_string();
+    //     let sid = self.sid.as_ref().ok_or(TaskError::ParseError)?;
+    //
+    //     let path = Path::new(file_path);
+    //     let file = File::open(path).await.map_err(|_| TaskError::ParseError)?;
+    //
+    //     let stream = FramedRead::new(file, BytesCodec::new()).map_ok(|b| b.freeze());
+    //
+    //     let file_part = Part::stream(reqwest::Body::wrap_stream(stream))
+    //         .file_name({
+    //             Path::new(file_path)
+    //                 .file_name()
+    //                 .and_then(|os| os.to_str())
+    //                 .map(|s| s.to_string())
+    //                 .unwrap_or_else(|| "upload".to_string())
+    //         })
+    //         .mime_str("application/octet-stream")
+    //         .map_err(|_| TaskError::ParseError)?;
+    //
+    //     let form = Form::new()
+    //         .text("api", api.to_string())
+    //         .text("version", version.clone())
+    //         .text("method", "create".to_string())
+    //         .text("_sid", sid.clone())
+    //         .part("file", file_part);
+    //     eprintln!("form: {:?}", &form);
+    //     sleep(Duration::from_secs(10)).await;
+    //
+    //     let resp = self
+    //         .http
+    //         .post(&endpoint)
+    //         .multipart(form)
+    //         .send()
+    //         .await
+    //         .map_err(|_| TaskError::ParseError)?;
+    //
+    //     let text = resp.text().await.map_err(|_| TaskError::ParseError)?;
+    //
+    //     #[derive(serde::Deserialize)]
+    //     struct RawResponse {
+    //         success: bool,
+    //         error: Option<ErrorObj>,
+    //     }
+    //     #[derive(serde::Deserialize)]
+    //     struct ErrorObj {
+    //         code: u32,
+    //     }
+    //
+    //     let parsed: RawResponse = serde_json::from_str(&text).map_err(|_| TaskError::ParseError)?;
+    //
+    //     if parsed.success {
+    //         Ok(())
+    //     } else if let Some(err) = parsed.error {
+    //         Err(TaskError::from_code(err.code))
+    //     } else {
+    //         Err(TaskError::ParseError)
+    //     }
+    // }
 }
 
 impl DownloadTask {

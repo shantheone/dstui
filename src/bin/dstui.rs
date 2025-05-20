@@ -1,4 +1,5 @@
 use dstui::{api::SynologyClient, config::AppConfig, config::run_config_wizard, ui::app::App};
+use std::env;
 use std::error::Error;
 
 #[tokio::main]
@@ -31,6 +32,9 @@ async fn async_main() -> Result<(), Box<dyn Error>> {
     let endpoint = format!("{}:{}", config.server_url, config.port);
     let mut client = SynologyClient::new(&endpoint);
 
+    // Get command line arguments
+    let args: Vec<String> = env::args().collect();
+
     // Logging in
     println!("󰍂  Logging in and downloading task list. Just a sec...");
     client.get_available_apis().await?;
@@ -44,10 +48,14 @@ async fn async_main() -> Result<(), Box<dyn Error>> {
         let mut app_term = ratatui::init();
         let mut app = App::new();
 
+        if args.len() == 2 {
+            app.add_task_from_file(&args[1], &mut client).await;
+        }
         // Get refresh interval from the config file
         let interval = config.refresh_interval;
 
         app.load_tasks(&client).await;
+
         app.run(&mut app_term, &mut client, interval).await?;
     }
     // Restore terminal

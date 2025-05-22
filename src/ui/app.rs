@@ -4,7 +4,7 @@ use crate::config::AppConfig;
 use crate::ui::centered_rect;
 use crate::util::{
     calculate_elapsed_time, format_bytes, format_seconds, format_timestamp, get_clipboard,
-    validate_url,
+    render_progress_bar, validate_url,
 };
 use crossterm::event::{Event, EventStream, KeyCode, KeyEvent};
 use futures::StreamExt;
@@ -540,10 +540,13 @@ impl Widget for &App {
                 // Transfer
                 if let Some(add) = &task.additional {
                     let ratio_string;
+                    let ratio_percentage: u64;
                     if let Some(ratio) = DownloadTask::upload_download_ratio(task) {
                         ratio_string = format!("{:.2}", ratio);
+                        ratio_percentage = (ratio * 100.0) as u64;
                     } else {
                         ratio_string = "-".into();
+                        ratio_percentage = 0;
                     }
                     let t = add.transfer.as_ref();
                     Text::from(vec![
@@ -554,6 +557,10 @@ impl Widget for &App {
                             format_bytes(t.and_then(|t| t.size_uploaded).unwrap_or(0)),
                             format_bytes(t.and_then(|t| t.size_downloaded).unwrap_or(0)),
                             ratio_string
+                        )),
+                        Line::from(format!(
+                            "Ratio in percrntage: {}",
+                            render_progress_bar(ratio_percentage, 20)
                         )),
                         Line::from(format!(
                             "DL Speed           : {}",

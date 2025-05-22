@@ -45,8 +45,7 @@ pub fn calculate_elapsed_time(start: u64, finish: u64) -> String {
     }
 }
 
-pub fn render_progress_bar(percentage: u64) -> String {
-    let width = 10_usize; // total slots inside the brackets
+pub fn render_progress_bar(percentage: u64, width: usize) -> String {
     let percent_text = format!("{:>3}%", percentage); // e.g. " 42%"
     let text_len = percent_text.len();
 
@@ -110,8 +109,8 @@ mod tests {
 
     #[test]
     fn test_render_progress_bar() {
-        assert_eq!(render_progress_bar(50), "[███ 50%   ]");
-        assert_eq!(render_progress_bar(100), "[███100%███]");
+        assert_eq!(render_progress_bar(50, 10), "[███ 50%   ]");
+        assert_eq!(render_progress_bar(100, 10), "[███100%███]");
     }
 
     #[test]

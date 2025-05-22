@@ -864,7 +864,7 @@ impl DownloadTask {
                     0
                 };
                 // cells.push(format!("{}%", pct));
-                cells.push(render_progress_bar(pct));
+                cells.push(render_progress_bar(pct, 10));
             } else {
                 // no TransferInfo at all
                 cells.push("-".into());

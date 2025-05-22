@@ -688,7 +688,7 @@ impl Widget for &App {
                 Line::from("  k - Move up"),
                 Line::from("  h - Show previous tab"),
                 Line::from("  l - Show next tab"),
-                Line::from("  r - Manually refresh tasks (default refresh is 60 seconds)"),
+                Line::from("  r - Manually refresh tasks"),
                 Line::from("  p - Pause/resume selected task"),
                 Line::from("  d - Delete selected task"),
                 Line::from("  a - Add URL from system clipboard"),

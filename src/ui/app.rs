@@ -559,7 +559,7 @@ impl Widget for &App {
                             ratio_string
                         )),
                         Line::from(format!(
-                            "Ratio in percrntage: {}",
+                            "Ratio in percentage: {}",
                             render_progress_bar(ratio_percentage, 20)
                         )),
                         Line::from(format!(

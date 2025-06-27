@@ -563,7 +563,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "dstui2"
+name = "dstui"
 version = "0.3.0"
 dependencies = [
  "chrono",

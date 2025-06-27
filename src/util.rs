@@ -46,7 +46,7 @@ pub fn calculate_elapsed_time(start: u64, finish: u64) -> String {
 }
 
 pub fn render_progress_bar(percentage: u64, width: usize) -> String {
-    let percent_text = format!("{:>3}%", percentage); // e.g. " 42%"
+    let percent_text = format!("{percentage:>3}%"); // e.g. " 42%"
     let text_len = percent_text.len();
 
     // how many blocks should be “filled” (left of the bar)
@@ -68,7 +68,7 @@ pub fn render_progress_bar(percentage: u64, width: usize) -> String {
         }
     }
 
-    format!("[{}]", bar)
+    format!("[{bar}]")
 }
 
 // Get text from clipboard
@@ -91,7 +91,7 @@ pub fn validate_url(url: &str) -> Result<(), String> {
     {
         Ok(())
     } else {
-        Err(format!("Invalid URL: {}", url))
+        Err(format!("Invalid URL: {url}"))
     }
 }
 

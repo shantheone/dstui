@@ -1,22 +1,17 @@
-use dstui::{api::SynologyClient, config::AppConfig, config::run_config_wizard, ui::app::App};
+use crate::api::SynologyClient;
+use crate::app::App;
+use crate::config::{AppConfig, run_config_wizard};
 use std::error::Error;
 
+pub mod api;
+pub mod app;
+pub mod config;
+pub mod event;
+pub mod ui;
+pub mod util;
+
 #[tokio::main]
-async fn main() {
-    // Run our real async entrypoint
-    let result = async_main().await;
-
-    // Restore the terminal state
-    ratatui::restore();
-
-    if let Err(err) = result {
-        eprintln!("Application error: {}", err);
-        std::process::exit(1);
-    }
-}
-
-// Load or create dstui config
-async fn async_main() -> Result<(), Box<dyn Error>> {
+async fn main() -> Result<(), Box<dyn Error>> {
     let config = if let Some(cfg) = AppConfig::load() {
         cfg
     } else {
@@ -37,18 +32,17 @@ async fn async_main() -> Result<(), Box<dyn Error>> {
     client
         .login(&config.username, &config.password, "DownloadStation")
         .await
-        .map_err(|e| format!("Login failed: {}", e))?;
+        .map_err(|e| format!("Login failed: {e}"))?;
 
     // Launching the main app
     {
         let mut app_term = ratatui::init();
-        let mut app = App::new();
+        let app = App::new();
 
         // Get refresh interval from the config file
-        let interval = config.refresh_interval;
+        // let interval = config.refresh_interval;
 
-        app.load_tasks(&client).await;
-        app.run(&mut app_term, &mut client, interval).await?;
+        app.run(&mut app_term, &mut client).await?;
     }
     // Restore terminal
     ratatui::restore();

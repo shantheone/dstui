@@ -14,7 +14,7 @@ use std::{
     path::PathBuf,
 };
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct AppConfig {
     pub server_url: String,
     pub port: u16,

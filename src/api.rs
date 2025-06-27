@@ -193,7 +193,7 @@ pub struct TaskData {
     tasks: Vec<DownloadTask>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 pub struct DownloadTask {
     pub id: String,
     pub size: u64,
@@ -205,7 +205,7 @@ pub struct DownloadTask {
     pub additional: Option<AdditionalInfo>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone, Default)]
 pub struct AdditionalInfo {
     pub detail: Option<DetailInfo>,
     pub transfer: Option<TransferInfo>,
@@ -214,7 +214,7 @@ pub struct AdditionalInfo {
     pub tracker: Option<Vec<TrackerInfo>>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone, Default)]
 pub struct DetailInfo {
     pub connected_leechers: Option<u64>,
     pub connected_seeders: Option<u64>,
@@ -232,7 +232,7 @@ pub struct DetailInfo {
     pub uri: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone, Default)]
 pub struct TransferInfo {
     pub size_downloaded: Option<u64>,
     pub size_uploaded: Option<u64>,
@@ -241,7 +241,7 @@ pub struct TransferInfo {
     pub speed_upload: Option<u64>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone, Default)]
 pub struct FileInfo {
     pub filename: Option<String>,
     pub priority: Option<String>,
@@ -249,7 +249,7 @@ pub struct FileInfo {
     pub size_downloaded: Option<u64>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone, Default)]
 pub struct TrackerInfo {
     pub url: Option<String>,
     pub status: Option<String>,
@@ -258,13 +258,150 @@ pub struct TrackerInfo {
     pub peers: Option<i64>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone, Default)]
 pub struct PeerInfo {
     pub address: Option<String>,
     pub agent: Option<String>,
     pub progress: Option<f64>,
     pub speed_download: Option<u64>,
     pub speed_upload: Option<u64>,
+}
+
+#[derive(Debug, Clone)]
+pub struct FileEntry {
+    pub filename: String,
+    pub priority: String,
+    pub size: u64,
+    pub size_downloaded: u64,
+}
+
+#[derive(Debug, Clone)]
+pub struct PeerEntry {
+    pub address: String,
+    pub agent: String,
+    pub progress: f64,
+    pub speed_download: u64,
+    pub speed_upload: u64,
+}
+
+#[derive(Debug, Clone)]
+pub struct TrackerEntry {
+    pub url: String,
+    pub status: String,
+    pub update_timer: u64,
+    pub seeds: i64,
+    pub peers: i64,
+}
+
+#[derive(Debug)]
+// Wanted to have a cleared up, per task struct to display the properties easier. Don't know if
+// this is the good approach, but worksforme
+pub struct ExtendedDownloadTask {
+    pub task_id: String,
+    pub task_size: u64,
+    pub task_status: TaskStatus,
+    pub task_title: String,
+    pub task_type: String,
+    pub task_ratio: f64,
+    pub task_username: String,
+    pub connected_leechers: u64,
+    pub connected_seeders: u64,
+    pub connected_peers: u64,
+    pub task_create_time: u64,
+    pub task_started_time: u64,
+    pub task_completed_time: u64,
+    pub task_seedelapsed: u64,
+    pub task_destination: String,
+    pub task_priority: String,
+    pub total_peers: u64,
+    pub total_pieces: u64,
+    pub unzip_password: String,
+    pub waiting_seconds: u64,
+    pub task_uri: String,
+    pub task_size_downloaded: u64,
+    pub task_size_uploaded: u64,
+    pub task_downloaded_pieces: u64,
+    pub task_speed_download: u64,
+    pub task_speed_upload: u64,
+    pub files: Vec<FileEntry>,
+    pub peers: Vec<PeerEntry>,
+    pub trackers: Vec<TrackerEntry>,
+}
+
+impl From<DownloadTask> for ExtendedDownloadTask {
+    fn from(task: DownloadTask) -> Self {
+        let ratio = task.upload_download_ratio().unwrap_or_default();
+        let additional = task.additional.unwrap_or_default();
+        let detail = additional.detail.unwrap_or_default();
+        let transfer = additional.transfer.unwrap_or_default();
+        let files_detailed = additional
+            .file
+            .unwrap_or_default()
+            .into_iter()
+            .map(|f| FileEntry {
+                filename: f.filename.unwrap_or_default(),
+                priority: f.priority.unwrap_or_default(),
+                size: f.size.unwrap_or(0),
+                size_downloaded: f.size_downloaded.unwrap_or(0),
+            })
+            .collect();
+        let peers_detailed = additional
+            .peer
+            .unwrap_or_default()
+            .into_iter()
+            .map(|p| PeerEntry {
+                address: p.address.unwrap_or_default(),
+                agent: p.agent.unwrap_or_default(),
+                progress: p.progress.unwrap_or(0.0),
+                speed_download: p.speed_download.unwrap_or(0),
+                speed_upload: p.speed_upload.unwrap_or(0),
+            })
+            .collect();
+        let trackers_detailed = additional
+            .tracker
+            .unwrap_or_default()
+            .into_iter()
+            .map(|t| TrackerEntry {
+                url: t.url.unwrap_or_default(),
+                status: t.status.unwrap_or_default(),
+                update_timer: t.update_timer.unwrap_or(0),
+                seeds: t.seeds.unwrap_or(0),
+                peers: t.peers.unwrap_or(0),
+            })
+            .collect();
+
+        Self {
+            task_id: task.id,
+            task_size: task.size,
+            task_status: task.status,
+            task_title: task.title,
+            task_type: task.task_type,
+            task_username: task.username,
+            task_ratio: ratio,
+            connected_leechers: detail.connected_leechers.unwrap_or(0),
+            connected_seeders: detail.connected_seeders.unwrap_or(0),
+            connected_peers: detail.connected_peers.unwrap_or(0),
+            task_create_time: detail.create_time.unwrap_or(0),
+            task_started_time: detail.started_time.unwrap_or(0),
+            task_completed_time: detail.completed_time.unwrap_or(0),
+            task_seedelapsed: detail.seedelapsed.unwrap_or(0),
+            task_destination: detail.destination.unwrap_or_default(),
+            task_priority: detail.priority.unwrap_or_default(),
+            total_peers: detail.total_peers.unwrap_or(0),
+            total_pieces: detail.total_pieces.unwrap_or(0),
+            unzip_password: detail.unzip_password.unwrap_or_default(),
+            waiting_seconds: detail.waiting_seconds.unwrap_or(0),
+            task_uri: detail.uri.unwrap_or_default(),
+            task_size_downloaded: transfer.size_downloaded.unwrap_or(0),
+            task_size_uploaded: transfer.size_uploaded.unwrap_or(0),
+            task_downloaded_pieces: transfer.downloaded_pieces.unwrap_or(0),
+            task_speed_download: transfer.speed_download.unwrap_or(0),
+            task_speed_upload: transfer.speed_upload.unwrap_or(0),
+            files: files_detailed,
+            peers: peers_detailed,
+            trackers: trackers_detailed,
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -471,7 +608,7 @@ impl SynologyClient {
         let resp = self.http.get(&url).query(&params).send().await?;
         let text = resp.text().await?;
         let wrapper: ConfigResponse =
-            serde_json::from_str(&text).map_err(|e| format!("parsing ConfigResponse: {}", e))?;
+            serde_json::from_str(&text).map_err(|e| format!("parsing ConfigResponse: {e}"))?;
         if !wrapper.success {
             Err("getconfig returned success=false".into())
         } else {
@@ -610,14 +747,14 @@ impl SynologyClient {
             .query(&params)
             .send()
             .await
-            .map_err(|e| format!("Network error during pause_task: {}", e))?
+            .map_err(|e| format!("Network error during pause_task: {e}"))?
             .text()
             .await
-            .map_err(|e| format!("Failed to read pause response body: {}", e))?;
+            .map_err(|e| format!("Failed to read pause response body: {e}"))?;
 
         // Parse the standard WebAPI envelope
         let wrapper: TaskActionResponseWrapper = serde_json::from_str(&body)
-            .map_err(|e| format!("Failed to parse pause_task envelope: {}", e))?;
+            .map_err(|e| format!("Failed to parse pause_task envelope: {e}"))?;
 
         // Check overall success flag
         if !wrapper.success {
@@ -663,7 +800,7 @@ impl SynologyClient {
 
         // Parse the same envelope like in pause_task
         let wrapper: TaskActionResponseWrapper = serde_json::from_str(&body)
-            .map_err(|e| format!("Failed to parse resume envelope: {}", e))?;
+            .map_err(|e| format!("Failed to parse resume envelope: {e}"))?;
         if !wrapper.success {
             return Err(format!("Resume API returned success=false: {:?}", wrapper.error).into());
         }
@@ -674,7 +811,7 @@ impl SynologyClient {
             .map(|r| (r.id, r.error))
             .collect::<Vec<_>>();
         if let Some((bad_id, code)) = errs.pop() {
-            Err(format!("Resume failed for {} (code {})", bad_id, code).into())
+            Err(format!("Resume failed for {bad_id} (code {code})").into())
         } else {
             Ok(())
         }
@@ -711,14 +848,14 @@ impl SynologyClient {
             .query(&params)
             .send()
             .await
-            .map_err(|e| format!("Network error during delete_task: {}", e))?
+            .map_err(|e| format!("Network error during delete_task: {e}"))?
             .text()
             .await
-            .map_err(|e| format!("Failed to read delete response body: {}", e))?;
+            .map_err(|e| format!("Failed to read delete response body: {e}"))?;
 
         // Parse the standard WebAPI envelope
         let wrapper: TaskActionResponseWrapper = serde_json::from_str(&body)
-            .map_err(|e| format!("Failed to parse delete_task envelope: {}", e))?;
+            .map_err(|e| format!("Failed to parse delete_task envelope: {e}"))?;
 
         // Check overall success flag
         if !wrapper.success {
@@ -816,105 +953,36 @@ impl DownloadTask {
             _ => "Other type of download",
         }
     }
+}
 
+impl ExtendedDownloadTask {
     // Create a Vec from the downloaded info so the table can handle it later
     pub fn to_row_cells(&self) -> Vec<String> {
-        let mut cells = Vec::new();
-
-        // Title
-        cells.push(self.title.clone());
-
-        // Size
-        cells.push(format_bytes(self.size));
-
-        // Downloaded (if available)
-        if let Some(add) = &self.additional {
-            let downloaded = add
-                .transfer
-                .as_ref()
-                .and_then(|t| t.size_downloaded)
-                .unwrap_or(0);
-            cells.push(format_bytes(downloaded));
+        // let mut cells = Vec::new();
+        let downloaded = self.task_size_downloaded;
+        let total = self.task_size;
+        let pct = if total > 0 {
+            ((downloaded as f64 / total as f64) * 100.0).round() as u64
         } else {
-            cells.push("-".into());
-        }
-
-        // Uploaded
-        if let Some(add) = &self.additional {
-            let uploaded = add
-                .transfer
-                .as_ref()
-                .and_then(|t| t.size_uploaded)
-                .unwrap_or(0);
-            cells.push(format_bytes(uploaded));
-        } else {
-            cells.push("-".into());
-        }
-
-        // Progress
-        if let Some(add) = &self.additional {
-            // first unwrap the TransferInfo
-            if let Some(transfer) = &add.transfer {
-                // compute percent complete (downloaded vs total size)
-                let downloaded = transfer.size_downloaded.unwrap_or(0);
-                let total = self.size;
-                let pct = if total > 0 {
-                    ((downloaded as f64 / total as f64) * 100.0).round() as u64
-                } else {
-                    0
-                };
-                // cells.push(format!("{}%", pct));
-                cells.push(render_progress_bar(pct, 10));
-            } else {
-                // no TransferInfo at all
-                cells.push("-".into());
-            }
-        } else {
-            cells.push("-".into());
-        }
-
-        // Upload speed
-        if let Some(add) = &self.additional {
-            let upload_speed = add
-                .transfer
-                .as_ref()
-                .and_then(|t| t.speed_upload)
-                .unwrap_or(0);
-            cells.push(format_bytes(upload_speed));
-        } else {
-            // no TransferInfo at all
-            cells.push("-".into());
-        }
-
-        // Download speed
-        if let Some(add) = &self.additional {
-            let download_speed = add
-                .transfer
-                .as_ref()
-                .and_then(|t| t.speed_download)
-                .unwrap_or(0);
-            cells.push(format_bytes(download_speed));
-        } else {
-            // no TransferInfo at all
-            cells.push("-".into());
-        }
-
-        // Ratio
-        if let Some(ratio) = self.upload_download_ratio() {
-            cells.push(format!("{:.2}", ratio));
-        } else {
-            cells.push("-".into());
-        }
-
-        // Status label
-        cells.push(self.status.label().to_string());
-
+            0
+        };
+        let cells = vec![
+            self.task_title.clone(),
+            format_bytes(self.task_size),
+            format_bytes(self.task_size_downloaded),
+            format_bytes(self.task_size_uploaded),
+            render_progress_bar(pct, 10),
+            format_bytes(self.task_speed_upload),
+            format_bytes(self.task_speed_download),
+            format!("{:.2}", self.task_ratio),
+            self.task_status.label().to_string(),
+        ];
         cells
     }
 }
 
 // For some reason the API provides both string and numbers as status... Oh, well...
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum TaskStatus {
     Code(u64),
     Name(String),

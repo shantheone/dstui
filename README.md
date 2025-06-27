@@ -53,9 +53,8 @@ The color palette looks OK for me, but I use [wezterm](https://wezterm.org/) and
 - [ ] Adding tasks, right now this is not implemented
   - [x] Add tasks from URL
   - [ ] Add tasks from file (maybe as a command line argument)
-- [ ] Scrollable info window (mostly for the files tab)
+- [x] Scrollable info window (mostly for the files tab)
 - [ ] Tests!
 - [ ] Hashing the password in the config file, so it's not stored in clear-text
 - [ ] Some kind of release? Right now you can compile it for yourself, it should work for every OS. I tested it on Mac and Linux only
-- [ ] Using the newer DownloadStation2 API, which has no official documentation, so this is a stretch goal for me
 

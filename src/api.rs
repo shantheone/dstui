@@ -2,6 +2,7 @@ use crate::util::{format_bytes, render_progress_bar};
 use reqwest::{Client, ClientBuilder, cookie::Jar};
 use serde::{Deserialize, Deserializer};
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 #[derive(Debug, Clone)]
@@ -925,6 +926,11 @@ impl SynologyClient {
         } else {
             Err(TaskError::ParseError)
         }
+    }
+
+    // Add task from file
+    pub async fn create_task_from_file(&self, filepath: PathBuf) -> Result<(), TaskError> {
+        todo!()
     }
 }
 

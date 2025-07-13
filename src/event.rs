@@ -39,14 +39,22 @@ pub enum AppEvent {
     SelectNextRow,
     /// Select previous row in the table
     SelectPreviousRow,
+    /// Select next row in the filepicker
+    SelectNextRowFilePicker,
+    /// Select previous row in the filepicker
+    SelectPreviousRowFilePicker,
     /// Show help popup
     Help,
     /// Show server info popup
     ServerInfo,
-    /// Show add task popup
+    /// Show add task from URL popup
     ShowAddTaskFromUrl,
+    /// Show add task file picker
+    ShowAddTaskFromFile,
     /// Send in the actual new task
     AddTaskFromUrl,
+    /// Send in the task from file
+    AddTaskFromFile,
     /// Pause or resume task
     PauseResumeTask,
     /// Delete task

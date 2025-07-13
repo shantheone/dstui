@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use crate::AppConfig;
 use crate::SynologyClient;
 use crate::api::ConfigData;
@@ -27,8 +29,14 @@ pub struct App {
     pub refreshing_tasks: bool,
     /// Should we show add task popup?
     pub show_add_task_from_url: bool,
+    /// Should we show add task file picker?
+    pub show_add_task_from_file: bool,
+    /// File path for add_task_from_file()
+    pub file_path: PathBuf,
     /// So we will be able to handle the table selection state
     pub selected_row: TableState,
+    /// So we will be able to handle the filepicker selection state
+    pub selected_row_filepicker: TableState,
     /// Event handler.
     pub events: EventHandler,
     /// Store scroll offset for popups
@@ -66,7 +74,10 @@ impl Default for App {
             show_server_info: false,
             refreshing_tasks: false,
             show_add_task_from_url: false,
+            show_add_task_from_file: false,
+            file_path: PathBuf::new(),
             selected_row,
+            selected_row_filepicker: TableState::default(),
             events: EventHandler::new(&config),
             popup_scroll_position: 0,
             info_panel_scroll_position: 0,
@@ -133,13 +144,20 @@ impl App {
                 Event::App(app_event) => match app_event {
                     AppEvent::SelectNextRow => self.select_next_row(),
                     AppEvent::SelectPreviousRow => self.select_previous_row(),
+                    AppEvent::SelectNextRowFilePicker => self.select_next_row_filepicker(),
+                    AppEvent::SelectPreviousRowFilePicker => self.select_previous_row_filepicker(),
                     AppEvent::Help => self.show_help_popup(),
                     AppEvent::ServerInfo => self.show_server_info_popup(),
                     AppEvent::ShowAddTaskFromUrl => self.show_add_task_popup(),
+                    AppEvent::ShowAddTaskFromFile => self.show_add_task_file_picker(),
                     AppEvent::ShowError => {
                         self.show_error_popup();
                     }
                     AppEvent::AddTaskFromUrl => self.add_task_from_url(client).await,
+                    AppEvent::AddTaskFromFile => {
+                        self.add_task_from_file(client, self.file_path.clone())
+                            .await
+                    }
                     AppEvent::PauseResumeTask => {
                         self.pause_task(client).await;
                         self.events.send(AppEvent::ManualRefresh);
@@ -173,6 +191,7 @@ impl App {
                 if self.show_help
                     || self.show_server_info
                     || self.show_add_task_from_url
+                    || self.show_add_task_from_file
                     || self.show_error_popup
                 {
                     self.close_all_popups();
@@ -182,9 +201,13 @@ impl App {
                 }
             }
             KeyCode::Char('j') => {
+                if self.show_add_task_from_file {
+                    self.events.send(AppEvent::SelectNextRowFilePicker);
+                }
                 if !self.show_help
                     && !self.show_server_info
                     && !self.show_add_task_from_url
+                    && !self.show_add_task_from_file
                     && !self.show_error_popup
                 {
                     self.events.send(AppEvent::SelectNextRow)
@@ -193,7 +216,15 @@ impl App {
                 }
             }
             KeyCode::Char('k') => {
-                if !self.show_help && !self.show_server_info && !self.show_add_task_from_url {
+                if self.show_add_task_from_file {
+                    self.events.send(AppEvent::SelectPreviousRowFilePicker);
+                }
+                if !self.show_help
+                    && !self.show_server_info
+                    && !self.show_add_task_from_url
+                    && !self.show_add_task_from_file
+                    && !self.show_error_popup
+                {
                     self.events.send(AppEvent::SelectPreviousRow)
                 } else {
                     self.events.send(AppEvent::ScrollUp);
@@ -202,6 +233,7 @@ impl App {
             KeyCode::Down => self.events.send(AppEvent::ScrollDownInfo),
             KeyCode::Up => self.events.send(AppEvent::ScrollUpInfo),
             KeyCode::Char('a') => self.events.send(AppEvent::ShowAddTaskFromUrl),
+            KeyCode::Char('A') => self.events.send(AppEvent::ShowAddTaskFromFile),
             KeyCode::Enter => {
                 if self.show_add_task_from_url {
                     self.events.send(AppEvent::AddTaskFromUrl);
@@ -241,6 +273,16 @@ impl App {
         self.selected_row.select_previous();
     }
 
+    /// Select next row in the filepicker
+    pub fn select_next_row_filepicker(&mut self) {
+        self.selected_row_filepicker.select_next();
+    }
+
+    /// Select previous row in the filepicker
+    pub fn select_previous_row_filepicker(&mut self) {
+        self.selected_row_filepicker.select_previous();
+    }
+
     /// Store the index of the selected row in the task list
     pub fn selected_table_row_index(&self) -> usize {
         self.selected_row.selected().unwrap_or(0)
@@ -259,6 +301,11 @@ impl App {
     /// Add task popup state
     pub fn show_add_task_popup(&mut self) {
         self.show_add_task_from_url = true;
+    }
+
+    /// Add task from file popup state
+    pub fn show_add_task_file_picker(&mut self) {
+        self.show_add_task_from_file = true;
     }
 
     /// Error popup state
@@ -382,6 +429,11 @@ impl App {
         }
     }
 
+    /// Add task from file
+    pub async fn add_task_from_file(&mut self, client: &mut SynologyClient, file_path: PathBuf) {
+        todo!()
+    }
+
     pub async fn pause_task(&mut self, client: &mut SynologyClient) {
         let idx = self.selected_table_row_index();
         let id = &self.items[idx].id.clone();
@@ -417,6 +469,7 @@ impl App {
         self.show_help = false;
         self.show_server_info = false;
         self.show_add_task_from_url = false;
+        self.show_add_task_from_file = false;
         self.show_error_popup = false;
         self.error_message = None;
     }

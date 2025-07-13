@@ -1,7 +1,10 @@
 use crate::app::App;
-use crate::util::{format_seconds, format_timestamp, get_clipboard, render_progress_bar};
+use crate::util::{
+    format_seconds, format_timestamp, get_clipboard, get_files, render_progress_bar,
+};
 use crate::{AppConfig, util::format_bytes};
 
+use ratatui::widgets::TableState;
 use ratatui::{
     Terminal,
     buffer::Buffer,
@@ -9,8 +12,8 @@ use ratatui::{
     style::{Color, Style, Stylize},
     text::{Line, Text},
     widgets::{
-        Block, BorderType, Clear, Paragraph, Row, Scrollbar, ScrollbarOrientation, ScrollbarState,
-        StatefulWidget, Table, Tabs, Widget,
+        Block, BorderType, Cell, Clear, Paragraph, Row, Scrollbar, ScrollbarOrientation,
+        ScrollbarState, StatefulWidget, Table, Tabs, Widget,
     },
 };
 
@@ -379,6 +382,11 @@ impl Widget for &mut App {
         if self.show_add_task_from_url {
             App::render_add_task_popup(self, area, buf);
         }
+
+        // Show file picker
+        if self.show_add_task_from_file {
+            App::render_add_task_from_file_popup(self, area, buf);
+        }
     }
 }
 
@@ -478,7 +486,6 @@ impl App {
             Line::from(" p: Pause / Resume task"),
             Line::from(" r: Manually refresh tasks"),
             Line::from(" ↓: Scroll down in the info panel"),
-            Line::from(" ↑: Scroll up in the info panel"),
             Line::from(" ?: Show this help"),
         ];
 
@@ -502,6 +509,17 @@ impl App {
             add_task_text_lines,
             &mut self.popup_scroll_position,
             false,
+            area,
+            buf,
+        );
+    }
+
+    /// Show File picker
+    pub fn render_add_task_from_file_popup(&mut self, area: Rect, buf: &mut Buffer) {
+        create_filepicker_popup(
+            " File Picker ",
+            &mut self.selected_row_filepicker,
+            &mut self.popup_scroll_position,
             area,
             buf,
         );
@@ -617,5 +635,85 @@ fn create_popup(
         }),
         buf,
         &mut popup_scrollbar_state,
+    );
+}
+
+/// Create filepicker popup
+fn create_filepicker_popup(
+    popup_title: &str,
+    selected_row: &mut TableState,
+    scroll_position: &mut usize,
+    area: Rect,
+    buf: &mut Buffer,
+) {
+    // Create a popup Rect
+    let popup_rect = centered_rect(60, 40, area);
+
+    let current_dir = get_files();
+    let rows = current_dir
+        .iter()
+        .map(|(name, ext)| Row::new(vec![Cell::from(name.clone()), Cell::from(ext.clone())]))
+        .collect::<Vec<_>>();
+
+    // Auto-select the first row if nothing is selected
+    if selected_row.selected().is_none() && !rows.is_empty() {
+        selected_row.select(Some(0));
+    }
+    // Remove anything from the popup's background
+    Clear.render(popup_rect, buf);
+
+    // Visible lines and Max scroll value for the scrollbar
+    let visible_lines = popup_rect.height.saturating_sub(2);
+    let max_scroll = rows.len().saturating_sub(visible_lines as usize);
+
+    // Clamp the scroll position and update it at the same time so it will not go infinately
+    if *scroll_position > max_scroll {
+        *scroll_position = max_scroll;
+    }
+
+    let table_block = Block::bordered()
+        .title(popup_title)
+        .title_alignment(Alignment::Center)
+        .border_type(BorderType::Rounded);
+
+    // Row selection
+    let table_row_index = selected_row.selected().unwrap_or(0);
+    let table_state = selected_row;
+
+    // Create the table with content and styling
+    let header_titles = vec!["Filename", "Type"];
+    let header =
+        Row::new(header_titles).style(Style::default().fg(Color::White).bg(Color::DarkGray).bold());
+
+    let widths = [
+        Constraint::Percentage(80), // Filename
+        Constraint::Percentage(20), // Extension
+    ];
+
+    // Add a scrollbar
+    let table_scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
+        .begin_symbol(Some("↑"))
+        .end_symbol(Some("↓"));
+    let mut table_scrollbar_state = ScrollbarState::new(rows.len())
+        .position(table_row_index)
+        .viewport_content_length(1);
+
+    let table = Table::new(rows, widths)
+        .block(table_block)
+        .header(header)
+        .row_highlight_style(Style::new().reversed())
+        .column_spacing(1);
+
+    // Render stateful widget of the table
+    StatefulWidget::render(table, popup_rect, buf, table_state);
+    // Render stateful widget of the table scrollbar
+    StatefulWidget::render(
+        table_scrollbar,
+        popup_rect.inner(Margin {
+            vertical: 1,
+            horizontal: 0,
+        }),
+        buf,
+        &mut table_scrollbar_state,
     );
 }

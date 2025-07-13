@@ -2,7 +2,7 @@
 use chrono::{DateTime, Utc};
 use clipboard_rs::{self, Clipboard};
 use humantime::format_duration;
-use std::time::Duration;
+use std::{fs, path::PathBuf, time::Duration};
 
 pub fn format_timestamp(ts: u64) -> String {
     let time = DateTime::from_timestamp(ts as i64, 0)
@@ -93,6 +93,50 @@ pub fn validate_url(url: &str) -> Result<(), String> {
     } else {
         Err(format!("Invalid URL: {url}"))
     }
+}
+
+pub fn get_files() -> Vec<(String, String)> {
+    let current_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let mut items = vec![];
+
+    // Manually add "." and ".."
+    items.push((".".to_string(), "Dir".to_string()));
+    items.push(("..".to_string(), "Dir".to_string()));
+
+    if let Ok(entries) = fs::read_dir(current_dir) {
+        for entry in entries.flatten() {
+            let file_name = entry
+                .file_name()
+                .into_string()
+                .unwrap_or_else(|_| "???".to_string());
+
+            let file_type = match entry.file_type() {
+                Ok(ft) if ft.is_dir() => "Dir",
+                Ok(ft) if ft.is_file() => "File",
+                Ok(ft) if ft.is_symlink() => "Symlink",
+                _ => "Unknown",
+            };
+
+            items.push((file_name, file_type.to_string()));
+        }
+    }
+    // Sort with custom comparator
+    items.sort_by(|a, b| {
+        match (a.0.as_str(), b.0.as_str()) {
+            // "." and ".." always go first
+            ("." | "..", "." | "..") => a.0.cmp(&b.0),
+            ("." | "..", _) => std::cmp::Ordering::Less,
+            (_, "." | "..") => std::cmp::Ordering::Greater,
+            // Directories before files
+            (_, _) if a.1 == b.1 => a.0.to_lowercase().cmp(&b.0.to_lowercase()),
+            (_, _) if a.1 == "Dir" => std::cmp::Ordering::Less,
+            (_, _) if b.1 == "Dir" => std::cmp::Ordering::Greater,
+            // Otherwise keep order
+            _ => std::cmp::Ordering::Equal,
+        }
+    });
+
+    items
 }
 
 // Half-assed attempt on testing

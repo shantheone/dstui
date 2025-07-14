@@ -73,6 +73,7 @@ pub fn render_progress_bar(percentage: u64, width: usize) -> String {
 
 // Get text from clipboard
 pub fn get_clipboard() -> String {
+    // FIXME: check if display is present, otherwise this call will crash
     let ctx = clipboard_rs::ClipboardContext::new().unwrap();
     ctx.get_text().unwrap_or("".to_string())
 }

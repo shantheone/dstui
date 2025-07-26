@@ -4,6 +4,7 @@ use crate::util::{
 };
 use crate::{AppConfig, util::format_bytes};
 
+use ratatui::style::Styled;
 use ratatui::widgets::TableState;
 use ratatui::{
     Terminal,
@@ -653,10 +654,15 @@ fn create_filepicker_popup(
     let rows: Vec<Row> = dir
         .iter()
         .map(|dir| {
+            let color = match dir.filetype.as_str() {
+                "torrent" => Color::Green,
+                _ => Color::Gray,
+            };
             Row::new(vec![
                 Cell::from(dir.filename.clone()),
                 Cell::from(dir.filetype.clone()),
             ])
+            .style(Style::default().fg(color))
         })
         .collect();
 

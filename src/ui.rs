@@ -647,13 +647,18 @@ fn create_filepicker_popup(
     buf: &mut Buffer,
 ) {
     // Create a popup Rect
-    let popup_rect = centered_rect(60, 40, area);
+    let popup_rect = centered_rect(50, 40, area);
 
-    let current_dir = get_files();
-    let rows = current_dir
+    let dir = get_files();
+    let rows: Vec<Row> = dir
         .iter()
-        .map(|(name, ext)| Row::new(vec![Cell::from(name.clone()), Cell::from(ext.clone())]))
-        .collect::<Vec<_>>();
+        .map(|dir| {
+            Row::new(vec![
+                Cell::from(dir.filename.clone()),
+                Cell::from(dir.filetype.clone()),
+            ])
+        })
+        .collect();
 
     // Auto-select the first row if nothing is selected
     if selected_row.selected().is_none() && !rows.is_empty() {

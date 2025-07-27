@@ -3,7 +3,8 @@ use chrono::{DateTime, Utc};
 use clipboard_rs::{self, Clipboard};
 use humantime::format_duration;
 use std::{
-    fs::{self},
+    fs::{self, File},
+    io::{self, Read},
     path::PathBuf,
     time::Duration,
 };
@@ -150,6 +151,13 @@ pub fn get_files() -> Vec<FileAttributes> {
     // Sort the results
     files.sort();
     files
+}
+
+pub fn get_file_content(file_path: String) -> io::Result<Vec<u8>> {
+    let mut file = File::open(file_path)?;
+    let mut buffer = Vec::new();
+    file.read_to_end(&mut buffer)?;
+    Ok(buffer)
 }
 
 // Half-assed attempt on testing

@@ -9,6 +9,7 @@ use crate::config;
 use crate::event::{AppEvent, Event, EventHandler};
 use crate::ui::get_selected_file;
 use crate::util::FileAttributes;
+use crate::util::get_file_content;
 use crate::util::get_files;
 use crate::util::{get_clipboard, validate_url};
 
@@ -450,9 +451,17 @@ impl App {
 
     /// Add task from file
     pub async fn add_task_from_file(&mut self, client: &mut SynologyClient, file_path: String) {
-        println!("You selected: {file_path}");
-        // print!("{:?}", dirlist[0].filepath);
-        // println!("{:?}", dirlist[self.selected_row_filepicker]);
+        if let Ok(file_data) = get_file_content(file_path.clone()) {
+            if let Err(e) = client.create_task_from_file(file_path, &file_data).await {
+                self.error_message = Some(format!("Failed to add task: {e}"));
+                self.show_error_popup = true;
+            } else {
+                self.load_tasks(client).await;
+            }
+        } else {
+            self.error_message = Some("Failed to read file.".to_string());
+            self.show_error_popup = true;
+        }
     }
 
     pub async fn pause_task(&mut self, client: &mut SynologyClient) {

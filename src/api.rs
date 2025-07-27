@@ -1,5 +1,6 @@
 use crate::util::{format_bytes, render_progress_bar};
-use reqwest::{Client, ClientBuilder, cookie::Jar};
+use reqwest::multipart::Part;
+use reqwest::{Client, ClientBuilder, cookie::Jar, multipart};
 use serde::{Deserialize, Deserializer};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -928,8 +929,82 @@ impl SynologyClient {
     }
 
     // Add task from file
-    pub async fn create_task_from_file(&self, filepath: String) -> Result<(), TaskError> {
-        todo!()
+    pub async fn create_task_from_file(
+        &self,
+        file_path: String,
+        file_data: &[u8],
+    ) -> Result<(), TaskError> {
+        // Build URL & parameters, early‐return on missing API info or SID
+        let api = "SYNO.DownloadStation.Task";
+        let version = self
+            .api_version(api)
+            .ok_or(TaskError::ParseError)?
+            .to_string();
+        let sid = self.sid.as_ref().ok_or(TaskError::ParseError)?;
+        let endpoint = self.api_url(api).ok_or(TaskError::ParseError)?; // missing API info is unexpected here
+
+        // Validation
+        if file_data.is_empty() {
+            todo!("Create error for empty file")
+        }
+
+        if file_path.is_empty() {
+            todo!("Create error for empty file path")
+        }
+
+        if !file_path.ends_with(".torrent") {
+            todo!("Create error for not a torrent file")
+        }
+
+        // Create multipart form
+        // File part
+        let file_part = Part::bytes(file_data.to_vec())
+            .file_name(file_path)
+            .mime_str("application/x-bittorrent")
+            .unwrap();
+        // TODO: what is the context here? Until then use the unwrap above
+        // .context("Failed to create file part")?;
+
+        // Form
+        let form = multipart::Form::new()
+            .text("api", api)
+            .text("version", version)
+            .text("method", "create")
+            .text("type", "\"file\"")
+            .text("file", "[\"torrent\"]")
+            .text("create_list", "false")
+            .part("torrent", file_part);
+
+        let url = format!("{}{}?_sid={}", self.base_url, endpoint, sid);
+
+        let resp = self
+            .http
+            .post(url)
+            .multipart(form)
+            .send()
+            .await
+            .map_err(|_| TaskError::ParseError)?;
+        let text = resp.text().await.map_err(|_| TaskError::ParseError)?;
+
+        #[derive(serde::Deserialize)]
+        struct RawResponse {
+            success: bool,
+            error: Option<ErrorObj>,
+        }
+        #[derive(serde::Deserialize)]
+        struct ErrorObj {
+            code: u32,
+        }
+
+        let parsed: RawResponse = serde_json::from_str(&text).map_err(|_| TaskError::ParseError)?;
+
+        if parsed.success {
+            Ok(())
+        } else if let Some(err) = parsed.error {
+            Err(TaskError::from_code(err.code))
+        } else {
+            Err(TaskError::ParseError)
+        }
     }
 }
 

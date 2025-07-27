@@ -1,10 +1,9 @@
 use crate::app::App;
 use crate::util::{
-    format_seconds, format_timestamp, get_clipboard, get_files, render_progress_bar,
+    FileAttributes, format_seconds, format_timestamp, get_clipboard, render_progress_bar,
 };
 use crate::{AppConfig, util::format_bytes};
 
-use ratatui::style::Styled;
 use ratatui::widgets::TableState;
 use ratatui::{
     Terminal,
@@ -518,11 +517,12 @@ impl App {
     /// Show File picker
     pub fn render_add_task_from_file_popup(&mut self, area: Rect, buf: &mut Buffer) {
         create_filepicker_popup(
-            " File Picker ",
+            " File Picker - press <Enter> to add file or close with <q> or ESC ",
             &mut self.selected_row_filepicker,
             &mut self.popup_scroll_position,
             area,
             buf,
+            &self.dir_list,
         );
     }
 
@@ -639,6 +639,13 @@ fn create_popup(
     );
 }
 
+pub fn get_selected_file<'a>(
+    files: &'a [FileAttributes],
+    state: &'a TableState,
+) -> Option<&'a FileAttributes> {
+    state.selected().map(|i| &files[i])
+}
+
 /// Create filepicker popup
 fn create_filepicker_popup(
     popup_title: &str,
@@ -646,12 +653,12 @@ fn create_filepicker_popup(
     scroll_position: &mut usize,
     area: Rect,
     buf: &mut Buffer,
+    dir_list: &[FileAttributes],
 ) {
     // Create a popup Rect
     let popup_rect = centered_rect(50, 40, area);
 
-    let dir = get_files();
-    let rows: Vec<Row> = dir
+    let rows: Vec<Row> = dir_list
         .iter()
         .map(|dir| {
             let color = match dir.filetype.as_str() {

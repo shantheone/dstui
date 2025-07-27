@@ -7,6 +7,9 @@ use crate::api::DownloadTask;
 use crate::api::ExtendedDownloadTask;
 use crate::config;
 use crate::event::{AppEvent, Event, EventHandler};
+use crate::ui::get_selected_file;
+use crate::util::FileAttributes;
+use crate::util::get_files;
 use crate::util::{get_clipboard, validate_url};
 
 use ratatui::widgets::ScrollbarState;
@@ -37,6 +40,8 @@ pub struct App {
     pub selected_row: TableState,
     /// So we will be able to handle the filepicker selection state
     pub selected_row_filepicker: TableState,
+    /// Keep a list of files
+    pub dir_list: Vec<FileAttributes>,
     /// Event handler.
     pub events: EventHandler,
     /// Store scroll offset for popups
@@ -78,6 +83,7 @@ impl Default for App {
             file_path: PathBuf::new(),
             selected_row,
             selected_row_filepicker: TableState::default(),
+            dir_list: get_files(),
             events: EventHandler::new(&config),
             popup_scroll_position: 0,
             info_panel_scroll_position: 0,
@@ -155,8 +161,12 @@ impl App {
                     }
                     AppEvent::AddTaskFromUrl => self.add_task_from_url(client).await,
                     AppEvent::AddTaskFromFile => {
-                        self.add_task_from_file(client, self.file_path.clone())
-                            .await
+                        if let Some(selected_file) =
+                            get_selected_file(&self.dir_list, &self.selected_row_filepicker)
+                        {
+                            self.add_task_from_file(client, selected_file.filepath.clone())
+                                .await
+                        }
                     }
                     AppEvent::PauseResumeTask => {
                         self.pause_task(client).await;
@@ -238,6 +248,10 @@ impl App {
                 if self.show_add_task_from_url {
                     self.events.send(AppEvent::AddTaskFromUrl);
                     self.show_add_task_from_url = false;
+                }
+                if self.show_add_task_from_file {
+                    self.events.send(AppEvent::AddTaskFromFile);
+                    self.show_add_task_from_file = false;
                 }
             }
             KeyCode::Char('h') => self.events.send(AppEvent::SelectPreviousTab),
@@ -429,9 +443,16 @@ impl App {
         }
     }
 
+    /// Return filelist
+    pub fn return_file_list(&self) -> &[FileAttributes] {
+        &self.dir_list
+    }
+
     /// Add task from file
-    pub async fn add_task_from_file(&mut self, client: &mut SynologyClient, file_path: PathBuf) {
-        todo!()
+    pub async fn add_task_from_file(&mut self, client: &mut SynologyClient, file_path: String) {
+        println!("You selected: {file_path}");
+        // print!("{:?}", dirlist[0].filepath);
+        // println!("{:?}", dirlist[self.selected_row_filepicker]);
     }
 
     pub async fn pause_task(&mut self, client: &mut SynologyClient) {

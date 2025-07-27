@@ -3,7 +3,7 @@ use chrono::{DateTime, Utc};
 use clipboard_rs::{self, Clipboard};
 use humantime::format_duration;
 use std::{
-    fs::{self, FileType},
+    fs::{self},
     path::PathBuf,
     time::Duration,
 };
@@ -101,7 +101,7 @@ pub fn validate_url(url: &str) -> Result<(), String> {
 }
 
 /// Get all files and in the current dir
-#[derive(Ord, PartialEq, PartialOrd, Eq)]
+#[derive(Ord, PartialEq, PartialOrd, Eq, Debug)]
 pub struct FileAttributes {
     pub filename: String,
     pub filepath: String,
@@ -109,7 +109,7 @@ pub struct FileAttributes {
 }
 
 impl FileAttributes {
-    fn new(filename: String, filepath: String, filetype: String) -> Self {
+    pub fn new(filename: String, filepath: String, filetype: String) -> Self {
         FileAttributes {
             filename,
             filepath,

@@ -986,7 +986,7 @@ impl SynologyClient {
             .text("create_list", "false")
             .part("torrent", file_part);
 
-        let url = format!("{}{}?_sid={}", self.base_url, endpoint, sid);
+        let url = format!("{endpoint}?_sid={sid}");
 
         let resp = self
             .http

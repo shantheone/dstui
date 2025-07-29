@@ -102,6 +102,10 @@ pub enum TaskError {
     FileDoesNotExist,        // 408
     Other(u32),              // Any other error code, not in documentation
     ParseError,              // JSON parsing error or network error
+    // Custom errors
+    EmptyFile,      // 700
+    EmptyFilePath,  // 701
+    NotTorrentFile, // 702
 }
 
 impl TaskError {
@@ -116,6 +120,10 @@ impl TaskError {
             406 => TaskError::NoDefaultDestination,
             407 => TaskError::SetDestinationFailed,
             408 => TaskError::FileDoesNotExist,
+            // Custom Error codes
+            700 => TaskError::EmptyFile,
+            701 => TaskError::EmptyFilePath,
+            702 => TaskError::NotTorrentFile,
             other => TaskError::Other(other),
         }
     }
@@ -131,8 +139,11 @@ impl TaskError {
             TaskError::NoDefaultDestination => "No default destination configured",
             TaskError::SetDestinationFailed => "Setting destination failed",
             TaskError::FileDoesNotExist => "File does not exist",
-            TaskError::Other(_) => "Unknown error",
             TaskError::ParseError => "Failed to parse response",
+            TaskError::EmptyFile => "File is empty",
+            TaskError::EmptyFilePath => "No file path found",
+            TaskError::NotTorrentFile => "Not a .torrent file",
+            TaskError::Other(_) => "Unknown error",
         }
     }
 }
@@ -945,15 +956,15 @@ impl SynologyClient {
 
         // Validation
         if file_data.is_empty() {
-            todo!("Create error for empty file")
+            return Err(TaskError::EmptyFile);
         }
 
         if file_path.is_empty() {
-            todo!("Create error for empty file path")
+            return Err(TaskError::EmptyFilePath);
         }
 
         if !file_path.ends_with(".torrent") {
-            todo!("Create error for not a torrent file")
+            return Err(TaskError::NotTorrentFile);
         }
 
         // Create multipart form

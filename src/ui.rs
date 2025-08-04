@@ -694,6 +694,11 @@ fn create_filepicker_popup(
     let table_block = Block::bordered()
         .title(popup_title)
         .title_alignment(Alignment::Center)
+        .title_bottom(
+            Line::from(" !! EXPERIMENTAL: may crash !! ")
+                .alignment(Alignment::Center)
+                .style(Style::default().fg(Color::LightRed)),
+        )
         .border_type(BorderType::Rounded);
 
     // Row selection

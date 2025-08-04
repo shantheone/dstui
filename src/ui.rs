@@ -476,6 +476,7 @@ impl App {
             Line::from("Shortcuts:"),
             Line::from(""),
             Line::from(" a: Add a new task by URL from clipboard"),
+            Line::from(" A: Add a new task from file, from the current directory"),
             Line::from(" d: Delete task"),
             Line::from(" h: Show previous tab"),
             Line::from(" i: Show server info"),

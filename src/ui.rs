@@ -486,6 +486,7 @@ impl App {
             Line::from(" q: Quit or close any open popup"),
             Line::from(" p: Pause / Resume task"),
             Line::from(" r: Manually refresh tasks"),
+            Line::from(" ↑: Scroll up in the info panel"),
             Line::from(" ↓: Scroll down in the info panel"),
             Line::from(" ?: Show this help"),
         ];

@@ -21,3 +21,6 @@ Session.vim
 
 # .torrent files
 *.torrent
+
+# Apple
+.DS_Store

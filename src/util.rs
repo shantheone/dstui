@@ -78,9 +78,12 @@ pub fn render_progress_bar(percentage: u64, width: usize) -> String {
 
 // Get text from clipboard
 pub fn get_clipboard() -> String {
-    // FIXME: check if display is present, otherwise this call will crash
     let ctx = clipboard_rs::ClipboardContext::new().unwrap();
-    ctx.get_text().unwrap_or("".to_string())
+
+    match ctx.get_text() {
+        Ok(cb_text) => cb_text.to_string(),
+        Err(_e) => "Could not reach clipboard".to_string(),
+    }
 }
 
 // Validate if the URL from the clipboard is OK

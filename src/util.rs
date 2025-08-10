@@ -1,6 +1,6 @@
 /// Collection of small utilities used all over the place
 use chrono::{DateTime, Utc};
-use clipboard_rs::{self, Clipboard};
+use clipboard_rs::{self, Clipboard, ClipboardContext};
 use humantime::format_duration;
 use std::{
     fs::{self, File},
@@ -78,11 +78,12 @@ pub fn render_progress_bar(percentage: u64, width: usize) -> String {
 
 // Get text from clipboard
 pub fn get_clipboard() -> String {
-    let ctx = clipboard_rs::ClipboardContext::new().unwrap();
-
-    match ctx.get_text() {
-        Ok(cb_text) => cb_text.to_string(),
-        Err(_e) => "Could not reach clipboard".to_string(),
+    match ClipboardContext::new() {
+        Ok(ctx) => match ctx.get_text() {
+            Ok(text) => text,
+            Err(_) => "Clipboard is empty or inaccessible".to_string(),
+        },
+        Err(_) => "Clipboard not available".to_string(),
     }
 }
 

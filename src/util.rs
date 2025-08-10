@@ -81,7 +81,10 @@ pub fn get_clipboard() -> String {
     match ClipboardContext::new() {
         Ok(ctx) => match ctx.get_text() {
             Ok(text) => text,
-            Err(_) => "Clipboard is empty or inaccessible".to_string(),
+            Err(_) => {
+                "Clipboard is empty or inaccessible, or perhaps you are trying to insert an image?"
+                    .to_string()
+            }
         },
         Err(_) => "Clipboard not available".to_string(),
     }

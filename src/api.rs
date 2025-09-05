@@ -946,13 +946,10 @@ impl SynologyClient {
         file_data: &[u8],
     ) -> Result<(), TaskError> {
         // Build URL & parameters, early‐return on missing API info or SID
-        let api = "SYNO.DownloadStation.Task";
-        let version = self
-            .api_version(api)
-            .ok_or(TaskError::ParseError)?
-            .to_string();
+        let api = "SYNO.DownloadStation2.Task";
+        let version = "2";
         let sid = self.sid.as_ref().ok_or(TaskError::ParseError)?;
-        let endpoint = self.api_url(api).ok_or(TaskError::ParseError)?; // missing API info is unexpected here
+        let endpoint = format!("{}/webapi/entry.cgi", self.base_url);
 
         // Validation
         if file_data.is_empty() {

@@ -230,14 +230,14 @@ impl App {
             KeyCode::Down => {
                 if self.show_add_task_from_file {
                     self.events.send(AppEvent::SelectNextRowFilePicker);
-                } else {
+                } else if !self.is_popup_active {
                     self.events.send(AppEvent::ScrollDownInfo);
                 }
             }
             KeyCode::Up => {
                 if self.show_add_task_from_file {
                     self.events.send(AppEvent::SelectPreviousRowFilePicker);
-                } else {
+                } else if !self.is_popup_active {
                     self.events.send(AppEvent::ScrollUpInfo);
                 }
             }

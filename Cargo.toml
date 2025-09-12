@@ -1,6 +1,6 @@
 [package]
 name = "dstui"
-version = "0.4.4"
+version = "0.4.5"
 description = "dstui"
 authors = ["shan <shandoor@gmail.com>"]
 license = "MIT"

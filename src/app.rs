@@ -197,86 +197,76 @@ impl App {
         Ok(())
     }
 
-    /// Handles the key events and updates the state of [`App`].
+    /// Handles the key events according to is a popup open or not
     pub fn handle_key_events(&mut self, key_event: KeyEvent) -> color_eyre::Result<()> {
+        if self.is_popup_active {
+            self.handle_popup_keys(key_event)?;
+        } else {
+            self.handle_global_keys(key_event)?;
+        }
+        Ok(())
+    }
+
+    /// Handles the key events when a popup is open
+    fn handle_popup_keys(&mut self, key_event: KeyEvent) -> color_eyre::Result<()> {
         match key_event.code {
             KeyCode::Esc | KeyCode::Char('q') => {
-                // Close the popups if they are open
-                if self.is_popup_active {
-                    self.close_all_popups();
-                // Otherwise close the application
-                } else {
-                    self.events.send(AppEvent::Quit)
-                }
+                self.close_all_popups();
             }
             KeyCode::Char('j') => {
                 if self.show_add_task_from_file {
                     self.events.send(AppEvent::SelectNextRowFilePicker);
-                } else if self.is_popup_active {
+                } else {
                     self.events.send(AppEvent::ScrollDown);
-                } else if !self.is_popup_active {
-                    self.events.send(AppEvent::SelectNextRow)
                 }
             }
             KeyCode::Char('k') => {
                 if self.show_add_task_from_file {
                     self.events.send(AppEvent::SelectPreviousRowFilePicker);
-                } else if self.is_popup_active {
+                } else {
                     self.events.send(AppEvent::ScrollUp);
-                } else if !self.is_popup_active {
-                    self.events.send(AppEvent::SelectPreviousRow)
                 }
             }
-            KeyCode::Down => {
-                if self.show_add_task_from_file {
-                    self.events.send(AppEvent::SelectNextRowFilePicker);
-                } else if !self.is_popup_active {
-                    self.events.send(AppEvent::ScrollDownInfo);
-                }
+            KeyCode::Down if self.show_add_task_from_file => {
+                self.events.send(AppEvent::SelectNextRowFilePicker);
             }
-            KeyCode::Up => {
-                if self.show_add_task_from_file {
-                    self.events.send(AppEvent::SelectPreviousRowFilePicker);
-                } else if !self.is_popup_active {
-                    self.events.send(AppEvent::ScrollUpInfo);
-                }
+            KeyCode::Up if self.show_add_task_from_file => {
+                self.events.send(AppEvent::SelectPreviousRowFilePicker);
             }
+            KeyCode::Char('y') | KeyCode::Char('Y') if self.show_delete_confirmation_popup => {
+                self.events.send(AppEvent::DeleteTask);
+                self.close_all_popups();
+            }
+            KeyCode::Char('n') | KeyCode::Char('N') if self.show_delete_confirmation_popup => {
+                self.close_all_popups();
+            }
+            KeyCode::Enter if self.show_add_task_from_url => {
+                self.events.send(AppEvent::AddTaskFromUrl);
+                self.close_all_popups();
+            }
+            KeyCode::Enter if self.show_add_task_from_file => {
+                self.events.send(AppEvent::AddTaskFromFile);
+                self.close_all_popups();
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    /// Handles global keys
+    fn handle_global_keys(&mut self, key_event: KeyEvent) -> color_eyre::Result<()> {
+        match key_event.code {
+            KeyCode::Esc | KeyCode::Char('q') => {
+                self.events.send(AppEvent::Quit);
+            }
+            KeyCode::Char('j') => self.events.send(AppEvent::SelectNextRow),
+            KeyCode::Char('k') => self.events.send(AppEvent::SelectPreviousRow),
+            KeyCode::Down => self.events.send(AppEvent::ScrollDownInfo),
+            KeyCode::Up => self.events.send(AppEvent::ScrollUpInfo),
+            KeyCode::Char('h') => self.events.send(AppEvent::SelectPreviousTab),
+            KeyCode::Char('l') => self.events.send(AppEvent::SelectNextTab),
             KeyCode::Char('a') => self.events.send(AppEvent::ShowAddTaskFromUrl),
             KeyCode::Char('A') => self.events.send(AppEvent::ShowAddTaskFromFile),
-            KeyCode::Enter => {
-                if self.show_add_task_from_url {
-                    self.events.send(AppEvent::AddTaskFromUrl);
-                    self.show_add_task_from_url = false;
-                }
-                if self.show_add_task_from_file {
-                    self.events.send(AppEvent::AddTaskFromFile);
-                    self.show_add_task_from_file = false;
-                }
-            }
-            KeyCode::Char('y') | KeyCode::Char('Y') => {
-                if self.show_delete_confirmation_popup {
-                    // Confirmation received, delete task
-                    self.events.send(AppEvent::DeleteTask);
-                    // Close the popup
-                    self.show_delete_confirmation_popup = false;
-                }
-            }
-            KeyCode::Char('n') | KeyCode::Char('N') => {
-                if self.show_delete_confirmation_popup {
-                    // No confirmation, leave the taks alone and close the popup
-                    self.show_delete_confirmation_popup = false;
-                }
-            }
-            KeyCode::Char('h') => {
-                if !self.is_popup_active {
-                    self.events.send(AppEvent::SelectPreviousTab)
-                }
-            }
-            KeyCode::Char('l') => {
-                if !self.is_popup_active {
-                    self.events.send(AppEvent::SelectNextTab)
-                }
-            }
             KeyCode::Char('i') => self.events.send(AppEvent::ServerInfo),
             KeyCode::Char('p') => self.events.send(AppEvent::PauseResumeTask),
             KeyCode::Char('r') => self.events.send(AppEvent::ManualRefresh),
@@ -286,7 +276,6 @@ impl App {
         }
         Ok(())
     }
-
     /// Handles the tick event of the terminal.
     ///
     /// The tick event is where you can update the state of your application with any logic that

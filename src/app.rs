@@ -65,6 +65,8 @@ pub struct App {
     pub show_error_popup: bool,
     /// Should we show the confirmation popup?
     pub show_delete_confirmation_popup: bool,
+    /// Is any popup active?
+    pub is_popup_active: bool,
     /// Store config info received from the API
     pub dsconfig: Option<ConfigData>,
 }
@@ -109,6 +111,7 @@ impl Default for App {
             error_message: None,
             show_error_popup: false,
             show_delete_confirmation_popup: false,
+            is_popup_active: false,
             dsconfig: None,
         }
     }
@@ -199,13 +202,7 @@ impl App {
         match key_event.code {
             KeyCode::Esc | KeyCode::Char('q') => {
                 // Close the popups if they are open
-                if self.show_help
-                    || self.show_server_info
-                    || self.show_add_task_from_url
-                    || self.show_add_task_from_file
-                    || self.show_error_popup
-                    || self.show_delete_confirmation_popup
-                {
+                if self.is_popup_active {
                     self.close_all_popups();
                 // Otherwise close the application
                 } else {
@@ -215,39 +212,35 @@ impl App {
             KeyCode::Char('j') => {
                 if self.show_add_task_from_file {
                     self.events.send(AppEvent::SelectNextRowFilePicker);
-                }
-                // Disable 'j' when popup is active
-                if !self.show_help
-                    && !self.show_server_info
-                    && !self.show_add_task_from_url
-                    && !self.show_add_task_from_file
-                    && !self.show_error_popup
-                    && !self.show_delete_confirmation_popup
-                {
-                    self.events.send(AppEvent::SelectNextRow)
-                } else {
+                } else if self.is_popup_active {
                     self.events.send(AppEvent::ScrollDown);
+                } else if !self.is_popup_active {
+                    self.events.send(AppEvent::SelectNextRow)
                 }
             }
             KeyCode::Char('k') => {
-                // Disable 'k' when popup is active
                 if self.show_add_task_from_file {
                     self.events.send(AppEvent::SelectPreviousRowFilePicker);
-                }
-                if !self.show_help
-                    && !self.show_server_info
-                    && !self.show_add_task_from_url
-                    && !self.show_add_task_from_file
-                    && !self.show_error_popup
-                    && !self.show_delete_confirmation_popup
-                {
-                    self.events.send(AppEvent::SelectPreviousRow)
-                } else {
+                } else if self.is_popup_active {
                     self.events.send(AppEvent::ScrollUp);
+                } else if !self.is_popup_active {
+                    self.events.send(AppEvent::SelectPreviousRow)
                 }
             }
-            KeyCode::Down => self.events.send(AppEvent::ScrollDownInfo),
-            KeyCode::Up => self.events.send(AppEvent::ScrollUpInfo),
+            KeyCode::Down => {
+                if self.show_add_task_from_file {
+                    self.events.send(AppEvent::SelectNextRowFilePicker);
+                } else {
+                    self.events.send(AppEvent::ScrollDownInfo);
+                }
+            }
+            KeyCode::Up => {
+                if self.show_add_task_from_file {
+                    self.events.send(AppEvent::SelectPreviousRowFilePicker);
+                } else {
+                    self.events.send(AppEvent::ScrollUpInfo);
+                }
+            }
             KeyCode::Char('a') => self.events.send(AppEvent::ShowAddTaskFromUrl),
             KeyCode::Char('A') => self.events.send(AppEvent::ShowAddTaskFromFile),
             KeyCode::Enter => {
@@ -274,8 +267,16 @@ impl App {
                     self.show_delete_confirmation_popup = false;
                 }
             }
-            KeyCode::Char('h') => self.events.send(AppEvent::SelectPreviousTab),
-            KeyCode::Char('l') => self.events.send(AppEvent::SelectNextTab),
+            KeyCode::Char('h') => {
+                if !self.is_popup_active {
+                    self.events.send(AppEvent::SelectPreviousTab)
+                }
+            }
+            KeyCode::Char('l') => {
+                if !self.is_popup_active {
+                    self.events.send(AppEvent::SelectNextTab)
+                }
+            }
             KeyCode::Char('i') => self.events.send(AppEvent::ServerInfo),
             KeyCode::Char('p') => self.events.send(AppEvent::PauseResumeTask),
             KeyCode::Char('r') => self.events.send(AppEvent::ManualRefresh),
@@ -325,31 +326,37 @@ impl App {
     /// Help popup state
     pub fn show_help_popup(&mut self) {
         self.show_help = true;
+        self.is_popup_active = true;
     }
 
     /// ServerInfo popup state
     pub fn show_server_info_popup(&mut self) {
         self.show_server_info = true;
+        self.is_popup_active = true;
     }
 
     /// Add task popup state
     pub fn show_add_task_popup(&mut self) {
         self.show_add_task_from_url = true;
+        self.is_popup_active = true;
     }
 
     /// Add task from file popup state
     pub fn show_add_task_file_picker(&mut self) {
         self.show_add_task_from_file = true;
+        self.is_popup_active = true;
     }
 
     /// Error popup state
     pub fn show_error_popup(&mut self) {
         self.show_error_popup = true;
+        self.is_popup_active = true;
     }
 
     /// Confirmation popup state
     pub fn show_delete_confirmation_popup(&mut self) {
         self.show_delete_confirmation_popup = true;
+        self.is_popup_active = true;
     }
 
     /// Scroll down in popup windows
@@ -527,5 +534,6 @@ impl App {
         self.show_error_popup = false;
         self.show_delete_confirmation_popup = false;
         self.error_message = None;
+        self.is_popup_active = false;
     }
 }

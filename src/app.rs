@@ -300,11 +300,13 @@ impl App {
 
     /// Select next row in task list
     pub fn select_next_row(&mut self) {
+        self.info_panel_scroll_position = 0;
         self.selected_row.select_next();
     }
 
     /// Select previous row in task list
     pub fn select_previous_row(&mut self) {
+        self.info_panel_scroll_position = 0;
         self.selected_row.select_previous();
     }
 
@@ -325,36 +327,42 @@ impl App {
 
     /// Help popup state
     pub fn show_help_popup(&mut self) {
+        self.popup_scroll_position = 0;
         self.show_help = true;
         self.is_popup_active = true;
     }
 
     /// ServerInfo popup state
     pub fn show_server_info_popup(&mut self) {
+        self.popup_scroll_position = 0;
         self.show_server_info = true;
         self.is_popup_active = true;
     }
 
     /// Add task popup state
     pub fn show_add_task_popup(&mut self) {
+        self.popup_scroll_position = 0;
         self.show_add_task_from_url = true;
         self.is_popup_active = true;
     }
 
     /// Add task from file popup state
     pub fn show_add_task_file_picker(&mut self) {
+        self.popup_scroll_position = 0;
         self.show_add_task_from_file = true;
         self.is_popup_active = true;
     }
 
     /// Error popup state
     pub fn show_error_popup(&mut self) {
+        self.popup_scroll_position = 0;
         self.show_error_popup = true;
         self.is_popup_active = true;
     }
 
     /// Confirmation popup state
     pub fn show_delete_confirmation_popup(&mut self) {
+        self.popup_scroll_position = 0;
         self.show_delete_confirmation_popup = true;
         self.is_popup_active = true;
     }

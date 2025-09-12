@@ -378,6 +378,11 @@ impl Widget for &mut App {
             App::render_error_popup(self, area, buf);
         }
 
+        // Show confirmation popup
+        if self.show_delete_confirmation_popup {
+            App::render_delete_confirmation_popup(self, area, buf);
+        }
+
         // Add task popup
         if self.show_add_task_from_url {
             App::render_add_task_popup(self, area, buf);
@@ -406,6 +411,7 @@ impl App {
 
     /// Show server info window
     pub fn render_info_popup(&mut self, area: Rect, buf: &mut Buffer) {
+        let bottom_title = " Scroll down/up if needed with <j> and <k>, close with <q> ";
         let server_config = self.load_config_file();
         let server_config_path = AppConfig::config_path()
             .into_os_string()
@@ -461,6 +467,7 @@ impl App {
 
             create_popup(
                 " Server Info ",
+                bottom_title,
                 server_info_lines,
                 &mut self.popup_scroll_position,
                 false,
@@ -491,8 +498,11 @@ impl App {
             Line::from(" ?: Show this help"),
         ];
 
+        let bottom_title = " Scroll down/up if needed with <j> and <k>, close with <q> ";
+
         create_popup(
             " Help ",
+            bottom_title,
             help_text_lines,
             &mut self.popup_scroll_position,
             false,
@@ -505,9 +515,11 @@ impl App {
     pub fn render_add_task_popup(&mut self, area: Rect, buf: &mut Buffer) {
         let clipboard_text = get_clipboard();
         let add_task_text_lines = vec![Line::from(clipboard_text)];
+        let bottom_title = " Scroll down/up if needed with <j> and <k>, close with <q> ";
 
         create_popup(
             " URL copied, press <Enter> to add task or close with <q> or ESC ",
+            bottom_title,
             add_task_text_lines,
             &mut self.popup_scroll_position,
             false,
@@ -531,11 +543,30 @@ impl App {
     /// Show error popup
     pub fn render_error_popup(&mut self, area: Rect, buf: &mut Buffer) {
         let error_text = Line::from(self.error_message.clone().unwrap_or_default());
+        let bottom_title = " Scroll down/up if needed with <j> and <k>, close with <q> ";
+
         create_popup(
             " Error ",
+            bottom_title,
             vec![error_text],
             &mut self.popup_scroll_position,
             true,
+            area,
+            buf,
+        );
+    }
+
+    /// Show confirmation popup
+    pub fn render_delete_confirmation_popup(&mut self, area: Rect, buf: &mut Buffer) {
+        let confirm_text_lines = vec![Line::from(" (Y)es / (N)o")];
+        let bottom_title = " Select <y> or <n>, close with <q> ";
+
+        create_popup(
+            " Confirm Task Deletion ",
+            bottom_title,
+            confirm_text_lines,
+            &mut self.popup_scroll_position,
+            false,
             area,
             buf,
         );
@@ -567,6 +598,7 @@ pub fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
 /// Create popup
 fn create_popup(
     popup_title: &str,
+    popup_bottom_title: &str,
     popup_text_lines: Vec<Line>,
     scroll_position: &mut usize,
     is_error_popup: bool,
@@ -596,10 +628,7 @@ fn create_popup(
 
     let popup_block = Block::bordered()
         .title(popup_title)
-        .title_bottom(
-            Line::from(" Scroll down/up if needed with <j> and <k>, close with <q> ")
-                .alignment(Alignment::Center),
-        )
+        .title_bottom(Line::from(popup_bottom_title).alignment(Alignment::Center))
         .title_alignment(Alignment::Left)
         .border_type(BorderType::Rounded);
 

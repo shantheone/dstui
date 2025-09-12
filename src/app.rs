@@ -63,6 +63,8 @@ pub struct App {
     /// Error popup content
     pub error_message: Option<String>,
     pub show_error_popup: bool,
+    /// Should we show the confirmation popup?
+    pub show_delete_confirmation_popup: bool,
     /// Store config info received from the API
     pub dsconfig: Option<ConfigData>,
 }
@@ -106,6 +108,7 @@ impl Default for App {
             extended_items: vec![],
             error_message: None,
             show_error_popup: false,
+            show_delete_confirmation_popup: false,
             dsconfig: None,
         }
     }
@@ -157,9 +160,8 @@ impl App {
                     AppEvent::ServerInfo => self.show_server_info_popup(),
                     AppEvent::ShowAddTaskFromUrl => self.show_add_task_popup(),
                     AppEvent::ShowAddTaskFromFile => self.show_add_task_file_picker(),
-                    AppEvent::ShowError => {
-                        self.show_error_popup();
-                    }
+                    AppEvent::ShowError => self.show_error_popup(),
+                    AppEvent::ShowDeleteConfirmation => self.show_delete_confirmation_popup(),
                     AppEvent::AddTaskFromUrl => self.add_task_from_url(client).await,
                     AppEvent::AddTaskFromFile => {
                         if let Some(selected_file) =
@@ -178,9 +180,7 @@ impl App {
                         self.events.send(AppEvent::ManualRefresh);
                     }
                     // AppEvent::DeleteTask => self.add_task_from_url(client).await,
-                    AppEvent::ManualRefresh => {
-                        self.refresh_tasks(client, terminal).await?;
-                    }
+                    AppEvent::ManualRefresh => self.refresh_tasks(client, terminal).await?,
                     AppEvent::ScrollDown => self.scroll_down(),
                     AppEvent::ScrollUp => self.scroll_up(),
                     AppEvent::ScrollDownInfo => self.scroll_down_info(),
@@ -204,6 +204,7 @@ impl App {
                     || self.show_add_task_from_url
                     || self.show_add_task_from_file
                     || self.show_error_popup
+                    || self.show_delete_confirmation_popup
                 {
                     self.close_all_popups();
                 // Otherwise close the application
@@ -215,11 +216,13 @@ impl App {
                 if self.show_add_task_from_file {
                     self.events.send(AppEvent::SelectNextRowFilePicker);
                 }
+                // Disable 'j' when popup is active
                 if !self.show_help
                     && !self.show_server_info
                     && !self.show_add_task_from_url
                     && !self.show_add_task_from_file
                     && !self.show_error_popup
+                    && !self.show_delete_confirmation_popup
                 {
                     self.events.send(AppEvent::SelectNextRow)
                 } else {
@@ -227,6 +230,7 @@ impl App {
                 }
             }
             KeyCode::Char('k') => {
+                // Disable 'k' when popup is active
                 if self.show_add_task_from_file {
                     self.events.send(AppEvent::SelectPreviousRowFilePicker);
                 }
@@ -235,6 +239,7 @@ impl App {
                     && !self.show_add_task_from_url
                     && !self.show_add_task_from_file
                     && !self.show_error_popup
+                    && !self.show_delete_confirmation_popup
                 {
                     self.events.send(AppEvent::SelectPreviousRow)
                 } else {
@@ -255,12 +260,26 @@ impl App {
                     self.show_add_task_from_file = false;
                 }
             }
+            KeyCode::Char('y') | KeyCode::Char('Y') => {
+                if self.show_delete_confirmation_popup {
+                    // Confirmation received, delete task
+                    self.events.send(AppEvent::DeleteTask);
+                    // Close the popup
+                    self.show_delete_confirmation_popup = false;
+                }
+            }
+            KeyCode::Char('n') | KeyCode::Char('N') => {
+                if self.show_delete_confirmation_popup {
+                    // No confirmation, leave the taks alone and close the popup
+                    self.show_delete_confirmation_popup = false;
+                }
+            }
             KeyCode::Char('h') => self.events.send(AppEvent::SelectPreviousTab),
             KeyCode::Char('l') => self.events.send(AppEvent::SelectNextTab),
             KeyCode::Char('i') => self.events.send(AppEvent::ServerInfo),
             KeyCode::Char('p') => self.events.send(AppEvent::PauseResumeTask),
             KeyCode::Char('r') => self.events.send(AppEvent::ManualRefresh),
-            KeyCode::Char('d') => self.events.send(AppEvent::DeleteTask),
+            KeyCode::Char('d') => self.events.send(AppEvent::ShowDeleteConfirmation),
             KeyCode::Char('?') => self.events.send(AppEvent::Help),
             _ => {}
         }
@@ -326,6 +345,11 @@ impl App {
     /// Error popup state
     pub fn show_error_popup(&mut self) {
         self.show_error_popup = true;
+    }
+
+    /// Confirmation popup state
+    pub fn show_delete_confirmation_popup(&mut self) {
+        self.show_delete_confirmation_popup = true;
     }
 
     /// Scroll down in popup windows
@@ -501,6 +525,7 @@ impl App {
         self.show_add_task_from_url = false;
         self.show_add_task_from_file = false;
         self.show_error_popup = false;
+        self.show_delete_confirmation_popup = false;
         self.error_message = None;
     }
 }

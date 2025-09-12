@@ -61,6 +61,8 @@ pub enum AppEvent {
     DeleteTask,
     /// Show error
     ShowError,
+    /// Show confirmation
+    ShowDeleteConfirmation,
     /// Manual refresh
     ManualRefresh,
     /// Scroll down in popups

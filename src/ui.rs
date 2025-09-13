@@ -558,7 +558,7 @@ impl App {
 
     /// Show confirmation popup
     pub fn render_delete_confirmation_popup(&mut self, area: Rect, buf: &mut Buffer) {
-        let confirm_text_lines = vec![Line::from(" (Y)es / (N)o")];
+        let confirm_text_lines = vec![Line::from(" (Y)es / (N)o ").alignment(Alignment::Center)];
         let bottom_title = " Select <y> or <n>, close with <q> ";
 
         create_popup(
@@ -566,7 +566,7 @@ impl App {
             bottom_title,
             confirm_text_lines,
             &mut self.popup_scroll_position,
-            false,
+            true,
             area,
             buf,
         );

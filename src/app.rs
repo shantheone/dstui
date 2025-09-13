@@ -65,8 +65,6 @@ pub struct App {
     pub extended_items: Vec<ExtendedDownloadTask>,
     /// Error popup content
     pub error_message: Option<String>,
-    /// Is any popup active?
-    pub is_popup_active: bool,
     /// Store config info received from the API
     pub dsconfig: Option<ConfigData>,
     /// Store active popup information
@@ -107,7 +105,6 @@ impl Default for App {
             items: vec![],
             extended_items: vec![],
             error_message: None,
-            is_popup_active: false,
             dsconfig: None,
             active_popup: None,
         }
@@ -196,7 +193,7 @@ impl App {
 
     /// Handles the key events according to is a popup open or not
     pub fn handle_key_events(&mut self, key_event: KeyEvent) -> color_eyre::Result<()> {
-        if self.is_popup_active {
+        if self.active_popup.is_some() {
             self.handle_popup_keys(key_event)?;
         } else {
             self.handle_global_keys(key_event)?;
@@ -317,37 +314,31 @@ impl App {
     /// Help popup state
     pub fn show_help_popup(&mut self) {
         self.active_popup = Some(Popup::Help);
-        self.is_popup_active = true;
     }
 
     /// ServerInfo popup state
     pub fn show_server_info_popup(&mut self) {
         self.active_popup = Some(Popup::ServerInfo);
-        self.is_popup_active = true;
     }
 
     /// Add task popup state
     pub fn show_add_task_popup(&mut self) {
         self.active_popup = Some(Popup::AddTaskFromUrl);
-        self.is_popup_active = true;
     }
 
     /// Add task from file popup state
     pub fn show_add_task_file_picker(&mut self) {
         self.active_popup = Some(Popup::AddTaskFromFile);
-        self.is_popup_active = true;
     }
 
     /// Error popup state
     pub fn show_error_popup(&mut self) {
         self.active_popup = Some(Popup::Error);
-        self.is_popup_active = true;
     }
 
     /// Confirmation popup state
     pub fn show_delete_confirmation_popup(&mut self) {
         self.active_popup = Some(Popup::DeleteConfirmation);
-        self.is_popup_active = true;
     }
 
     /// Scroll down in popup windows
@@ -521,7 +512,6 @@ impl App {
     pub fn close_all_popups(&mut self) {
         self.active_popup = None;
         self.error_message = None;
-        self.is_popup_active = false;
         self.popup_scroll_position = 0;
         self.selected_row_filepicker = TableState::default();
     }

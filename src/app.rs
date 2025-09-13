@@ -247,7 +247,6 @@ impl App {
             }
             KeyCode::Enter if self.active_popup == Some(Popup::AddTaskFromFile) => {
                 self.events.send(AppEvent::AddTaskFromFile);
-                self.close_all_popups();
             }
             _ => {}
         }
@@ -456,13 +455,13 @@ impl App {
                 Ok(()) => self.load_tasks(client).await,
                 Err(e) => {
                     self.error_message = Some(format!("Failed to add task: {e}"));
-                    self.active_popup = Some(Popup::Error);
+                    self.show_error_popup();
                 }
             },
 
             Err(e) => {
                 self.error_message = Some(e);
-                self.active_popup = Some(Popup::Error);
+                self.show_error_popup();
             }
         }
     }
@@ -477,13 +476,14 @@ impl App {
         if let Ok(file_data) = get_file_content(file_path.clone()) {
             if let Err(e) = client.create_task_from_file(file_path, &file_data).await {
                 self.error_message = Some(format!("Failed to add task: {e}"));
-                self.active_popup = Some(Popup::Error);
+                self.show_error_popup();
             } else {
                 self.load_tasks(client).await;
+                self.close_all_popups();
             }
         } else {
             self.error_message = Some("Failed to read file.".to_string());
-            self.active_popup = Some(Popup::Error);
+            self.show_error_popup();
         }
     }
 

@@ -20,21 +20,24 @@ use ratatui::{
     widgets::TableState,
 };
 
+/// Storing popups
+#[derive(Debug, PartialEq)]
+pub enum Popup {
+    Help,
+    AddTaskFromUrl,
+    AddTaskFromFile,
+    DeleteConfirmation,
+    ServerInfo,
+    Error,
+}
+
 /// Application.
 #[derive(Debug)]
 pub struct App {
     /// Is the application running?
     pub running: bool,
-    /// Should we show the help?
-    pub show_help: bool,
-    /// Should we show the server info?
-    pub show_server_info: bool,
     /// Refreshing tasks
     pub refreshing_tasks: bool,
-    /// Should we show add task popup?
-    pub show_add_task_from_url: bool,
-    /// Should we show add task file picker?
-    pub show_add_task_from_file: bool,
     /// File path for add_task_from_file()
     pub file_path: PathBuf,
     /// So we will be able to handle the table selection state
@@ -62,13 +65,12 @@ pub struct App {
     pub extended_items: Vec<ExtendedDownloadTask>,
     /// Error popup content
     pub error_message: Option<String>,
-    pub show_error_popup: bool,
-    /// Should we show the confirmation popup?
-    pub show_delete_confirmation_popup: bool,
     /// Is any popup active?
     pub is_popup_active: bool,
     /// Store config info received from the API
     pub dsconfig: Option<ConfigData>,
+    /// Store active popup information
+    pub active_popup: Option<Popup>,
 }
 
 impl Default for App {
@@ -80,11 +82,7 @@ impl Default for App {
 
         Self {
             running: true,
-            show_help: false,
-            show_server_info: false,
             refreshing_tasks: false,
-            show_add_task_from_url: false,
-            show_add_task_from_file: false,
             file_path: PathBuf::new(),
             selected_row,
             selected_row_filepicker: TableState::default(),
@@ -109,16 +107,15 @@ impl Default for App {
             items: vec![],
             extended_items: vec![],
             error_message: None,
-            show_error_popup: false,
-            show_delete_confirmation_popup: false,
             is_popup_active: false,
             dsconfig: None,
+            active_popup: None,
         }
     }
 }
 
 impl App {
-    /// Constructs a new instance of [`App`].
+    /// Constructs a new instance of App.
     pub fn new() -> Self {
         Self::default()
     }
@@ -214,37 +211,41 @@ impl App {
                 self.close_all_popups();
             }
             KeyCode::Char('j') => {
-                if self.show_add_task_from_file {
+                if self.active_popup == Some(Popup::AddTaskFromFile) {
                     self.events.send(AppEvent::SelectNextRowFilePicker);
                 } else {
                     self.events.send(AppEvent::ScrollDown);
                 }
             }
             KeyCode::Char('k') => {
-                if self.show_add_task_from_file {
+                if self.active_popup == Some(Popup::AddTaskFromFile) {
                     self.events.send(AppEvent::SelectPreviousRowFilePicker);
                 } else {
                     self.events.send(AppEvent::ScrollUp);
                 }
             }
-            KeyCode::Down if self.show_add_task_from_file => {
+            KeyCode::Down if self.active_popup == Some(Popup::AddTaskFromFile) => {
                 self.events.send(AppEvent::SelectNextRowFilePicker);
             }
-            KeyCode::Up if self.show_add_task_from_file => {
+            KeyCode::Up if self.active_popup == Some(Popup::AddTaskFromFile) => {
                 self.events.send(AppEvent::SelectPreviousRowFilePicker);
             }
-            KeyCode::Char('y') | KeyCode::Char('Y') if self.show_delete_confirmation_popup => {
+            KeyCode::Char('y') | KeyCode::Char('Y')
+                if self.active_popup == Some(Popup::DeleteConfirmation) =>
+            {
                 self.events.send(AppEvent::DeleteTask);
                 self.close_all_popups();
             }
-            KeyCode::Char('n') | KeyCode::Char('N') if self.show_delete_confirmation_popup => {
+            KeyCode::Char('n') | KeyCode::Char('N')
+                if self.active_popup == Some(Popup::DeleteConfirmation) =>
+            {
                 self.close_all_popups();
             }
-            KeyCode::Enter if self.show_add_task_from_url => {
+            KeyCode::Enter if self.active_popup == Some(Popup::AddTaskFromUrl) => {
                 self.events.send(AppEvent::AddTaskFromUrl);
                 self.close_all_popups();
             }
-            KeyCode::Enter if self.show_add_task_from_file => {
+            KeyCode::Enter if self.active_popup == Some(Popup::AddTaskFromFile) => {
                 self.events.send(AppEvent::AddTaskFromFile);
                 self.close_all_popups();
             }
@@ -316,37 +317,37 @@ impl App {
 
     /// Help popup state
     pub fn show_help_popup(&mut self) {
-        self.show_help = true;
+        self.active_popup = Some(Popup::Help);
         self.is_popup_active = true;
     }
 
     /// ServerInfo popup state
     pub fn show_server_info_popup(&mut self) {
-        self.show_server_info = true;
+        self.active_popup = Some(Popup::ServerInfo);
         self.is_popup_active = true;
     }
 
     /// Add task popup state
     pub fn show_add_task_popup(&mut self) {
-        self.show_add_task_from_url = true;
+        self.active_popup = Some(Popup::AddTaskFromUrl);
         self.is_popup_active = true;
     }
 
     /// Add task from file popup state
     pub fn show_add_task_file_picker(&mut self) {
-        self.show_add_task_from_file = true;
+        self.active_popup = Some(Popup::AddTaskFromFile);
         self.is_popup_active = true;
     }
 
     /// Error popup state
     pub fn show_error_popup(&mut self) {
-        self.show_error_popup = true;
+        self.active_popup = Some(Popup::Error);
         self.is_popup_active = true;
     }
 
     /// Confirmation popup state
     pub fn show_delete_confirmation_popup(&mut self) {
-        self.show_delete_confirmation_popup = true;
+        self.active_popup = Some(Popup::DeleteConfirmation);
         self.is_popup_active = true;
     }
 
@@ -455,13 +456,13 @@ impl App {
                 Ok(()) => self.load_tasks(client).await,
                 Err(e) => {
                     self.error_message = Some(format!("Failed to add task: {e}"));
-                    self.show_error_popup = true;
+                    self.active_popup = Some(Popup::Error);
                 }
             },
 
             Err(e) => {
                 self.error_message = Some(e);
-                self.show_error_popup = true;
+                self.active_popup = Some(Popup::Error);
             }
         }
     }
@@ -476,13 +477,13 @@ impl App {
         if let Ok(file_data) = get_file_content(file_path.clone()) {
             if let Err(e) = client.create_task_from_file(file_path, &file_data).await {
                 self.error_message = Some(format!("Failed to add task: {e}"));
-                self.show_error_popup = true;
+                self.active_popup = Some(Popup::Error);
             } else {
                 self.load_tasks(client).await;
             }
         } else {
             self.error_message = Some("Failed to read file.".to_string());
-            self.show_error_popup = true;
+            self.active_popup = Some(Popup::Error);
         }
     }
 
@@ -516,14 +517,9 @@ impl App {
         }
     }
 
-    // Close all popup from one place
+    // Close and reset all popup from one place
     pub fn close_all_popups(&mut self) {
-        self.show_help = false;
-        self.show_server_info = false;
-        self.show_add_task_from_url = false;
-        self.show_add_task_from_file = false;
-        self.show_error_popup = false;
-        self.show_delete_confirmation_popup = false;
+        self.active_popup = None;
         self.error_message = None;
         self.is_popup_active = false;
         self.popup_scroll_position = 0;

@@ -1,4 +1,4 @@
-use crate::app::App;
+use crate::app::{App, Popup};
 use crate::util::{
     FileAttributes, format_seconds, format_timestamp, get_clipboard, render_progress_bar,
 };
@@ -364,32 +364,32 @@ impl Widget for &mut App {
         info_paragraph.render(inner_area[1], buf);
 
         // Show help popup
-        if self.show_help {
+        if self.active_popup == Some(Popup::Help) {
             App::render_help_popup(self, area, buf);
         }
 
         // Show server info popup
-        if self.show_server_info {
+        if self.active_popup == Some(Popup::ServerInfo) {
             App::render_info_popup(self, area, buf);
         }
 
         // Show error popup
-        if self.show_error_popup {
+        if self.active_popup == Some(Popup::Error) {
             App::render_error_popup(self, area, buf);
         }
 
         // Show confirmation popup
-        if self.show_delete_confirmation_popup {
+        if self.active_popup == Some(Popup::DeleteConfirmation) {
             App::render_delete_confirmation_popup(self, area, buf);
         }
 
         // Add task popup
-        if self.show_add_task_from_url {
+        if self.active_popup == Some(Popup::AddTaskFromUrl) {
             App::render_add_task_popup(self, area, buf);
         }
 
         // Show file picker
-        if self.show_add_task_from_file {
+        if self.active_popup == Some(Popup::AddTaskFromFile) {
             App::render_add_task_from_file_popup(self, area, buf);
         }
     }

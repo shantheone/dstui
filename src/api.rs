@@ -597,7 +597,7 @@ impl SynologyClient {
                 None => AuthError::Other(0),
             });
         }
-        println!("✅ Logged out successfully!");
+        println!("󰍃 Logged out successfully!");
         Ok(())
     }
 

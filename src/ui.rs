@@ -1,8 +1,9 @@
 use crate::app::{App, Popup};
+use crate::config::AppConfig;
 use crate::util::{
-    FileAttributes, format_seconds, format_timestamp, get_clipboard, render_progress_bar,
+    FileAttributes, format_bytes, format_seconds, format_timestamp, get_clipboard,
+    render_progress_bar,
 };
-use crate::{AppConfig, util::format_bytes};
 
 use ratatui::widgets::TableState;
 use ratatui::{

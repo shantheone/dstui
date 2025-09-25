@@ -1,11 +1,11 @@
 use std::path::PathBuf;
 
-use crate::AppConfig;
-use crate::SynologyClient;
 use crate::api::ConfigData;
 use crate::api::DownloadTask;
 use crate::api::ExtendedDownloadTask;
+use crate::api::SynologyClient;
 use crate::config;
+use crate::config::AppConfig;
 use crate::event::{AppEvent, Event, EventHandler};
 use crate::ui::get_selected_file;
 use crate::util::FileAttributes;

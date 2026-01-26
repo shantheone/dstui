@@ -41,9 +41,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
         let mut app_term = ratatui::init();
         let app = App::new();
 
-        // Get refresh interval from the config file
-        // let interval = config.refresh_interval;
-
         app.run(&mut app_term, &mut client).await?;
     }
     // Restore terminal

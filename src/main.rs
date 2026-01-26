@@ -12,18 +12,20 @@ pub mod util;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
+    println!("+----------------------------------+");
+    println!("|   Synology DownloadStation TUI   |");
+    println!("+----------------------------------+");
     let config = if let Some(cfg) = AppConfig::load() {
         cfg
     } else {
         // No config file found -> run the wizard
-        let mut wiz_term = ratatui::init();
-        let cfg = run_config_wizard(&mut wiz_term)?;
+        let cfg = run_config_wizard()?;
         cfg.save()?; // Save config to file
         cfg
     };
 
     // Build client call from the config
-    let endpoint = format!("{}:{}", config.server_url, config.port);
+    let endpoint = format!("{}:{}", config.server_url, config.server_port);
     let mut client = SynologyClient::new(&endpoint);
 
     // Logging in

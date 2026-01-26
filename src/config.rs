@@ -1,23 +1,15 @@
-use crate::ui::centered_rect;
-use ratatui::{
-    Terminal,
-    backend::CrosstermBackend,
-    layout::{Constraint, Direction, Layout},
-    style::{Color, Modifier, Style},
-    text::{Line, Span},
-    widgets::{Block, Borders, Paragraph},
-};
+use dialoguer::{Confirm, Input, Password, theme::ColorfulTheme};
 use serde::{Deserialize, Serialize};
 use std::{
     fs,
-    io::{self, Stdout},
+    io::{self},
     path::PathBuf,
 };
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct AppConfig {
     pub server_url: String,
-    pub port: u16,
+    pub server_port: u16,
     pub username: String,
     pub password: String,
     pub refresh_interval: u64,
@@ -47,205 +39,84 @@ impl AppConfig {
     }
 }
 
-// Run a small Ratatui-based form to collect URL, port, user, pass.
-pub fn run_config_wizard(
-    terminal: &mut Terminal<CrosstermBackend<Stdout>>,
-) -> io::Result<AppConfig> {
-    use crossterm::event::{self, Event, KeyCode};
+pub fn run_config_wizard() -> io::Result<AppConfig> {
+    let mut server_url = String::new();
+    let mut server_port: u16 = 5000;
+    let mut username = String::new();
+    let mut password = String::new();
+    let mut refresh_interval: u64 = 60;
 
-    let labels = [
-        " Server URL ",
-        " Port ",
-        " Username ",
-        " Password ",
-        " Refresh Interval (in seconds)",
-    ];
-    let mut inputs = [
-        String::new(),
-        String::new(),
-        String::new(),
-        String::new(),
-        String::new(),
-    ];
-    let mut active = 0;
-    let mut error_msg: Option<String> = None;
+    println!("- Thank you for trying dstui!");
+    println!("! Configuration file not found. Please enter the following details:\n");
 
-    terminal.show_cursor()?;
+    let mut ok = false;
 
-    loop {
-        terminal.draw(|f| {
-            // Centered dialog area
-            let size = f.area();
-            let area = centered_rect(60, 70, size);
-
-            // Outer dialog box
-            let dialog = Block::default()
-                .borders(Borders::ALL)
-                .title(Span::styled(
-                    " DSTUI Setup ",
-                    Style::default()
-                        .fg(Color::Cyan)
-                        .add_modifier(Modifier::BOLD),
-                ))
-                .style(Style::default().bg(Color::Black).fg(Color::White));
-            f.render_widget(dialog, area);
-
-            // Split into 6 rows: 5 fields + footer
-            let rows = Layout::default()
-                .direction(Direction::Vertical)
-                .margin(1)
-                .constraints(
-                    [
-                        Constraint::Length(3), // Server URL input field
-                        Constraint::Length(3), // Port input field
-                        Constraint::Length(3), // Username input field
-                        Constraint::Length(3), // Password input field
-                        Constraint::Length(3), // Refresh interval field
-                        Constraint::Length(3), // Instructions
-                    ]
-                    .as_ref(),
-                )
-                .split(area);
-
-            // Render each input box
-            for (i, label) in labels.iter().enumerate() {
-                let display_value = if i == 3 {
-                    "*".repeat(inputs[i].len())
-                } else {
-                    inputs[i].clone()
-                };
-                let is_active = i == active;
-
-                // Titled, bordered field
-                let block = Block::default()
-                    .borders(Borders::ALL)
-                    .border_style(if is_active {
-                        Style::default().fg(Color::Yellow)
+    while !ok {
+        server_url = Input::with_theme(&ColorfulTheme::default())
+            .with_prompt("Server URL")
+            .with_initial_text("http://")
+            .validate_with({
+                move |input: &String| -> Result<(), &str> {
+                    if input.starts_with("http://")
+                        || input.starts_with("https://")
+                            && input != "http://"
+                            && input != "https://"
+                    {
+                        Ok(())
                     } else {
-                        Style::default()
-                    })
-                    .title(Span::styled(
-                        *label,
-                        if is_active {
-                            Style::default().add_modifier(Modifier::BOLD)
-                        } else {
-                            Style::default()
-                        },
-                    ));
-
-                let paragraph = Paragraph::new(display_value)
-                    .style(if is_active {
-                        Style::default().fg(Color::White)
-                    } else {
-                        Style::default().fg(Color::Gray)
-                    })
-                    .block(block)
-                    .alignment(ratatui::layout::Alignment::Left)
-                    .wrap(ratatui::widgets::Wrap { trim: false });
-
-                f.render_widget(paragraph, rows[i]);
-                let input_rect = rows[active];
-                let x = input_rect.x + 1 + inputs[active].len() as u16;
-                let y = input_rect.y + 1;
-                f.set_cursor_position((x, y));
-            }
-
-            // Footer: either error or help
-            let footer = if let Some(err) = &error_msg {
-                Paragraph::new(Line::from(Span::styled(
-                    err.clone(),
-                    Style::default().fg(Color::White).bg(Color::Red),
-                )))
-                .block(
-                    Block::default()
-                        .borders(Borders::ALL)
-                        .border_style(Style::default().fg(Color::Red)),
-                )
-                .alignment(ratatui::layout::Alignment::Center)
-            } else {
-                Paragraph::new(Line::from(vec![
-                    Span::raw("↑/↓: move  "),
-                    Span::raw("type: edit  "),
-                    Span::raw("Enter: next field  "),
-                    Span::raw("Enter(last): OK"),
-                ]))
-                .style(Style::default().fg(Color::Gray))
-                .alignment(ratatui::layout::Alignment::Center)
-            };
-            f.render_widget(footer, rows[5]);
-        })?;
-
-        // Handle keys
-        if let Event::Key(key) = event::read()? {
-            match key.code {
-                KeyCode::Char(c) => {
-                    // Only digits allowed in port *or* refresh fields
-                    if (active == 1 || active == 4) && c.is_ascii_digit() {
-                        inputs[active].push(c);
-                    } else if active != 1 && active != 4 {
-                        // free‐form text fields
-                        inputs[active].push(c);
+                        Err("Please enter a valid URL including http or https")
                     }
-                    error_msg = None;
                 }
-                KeyCode::Backspace => {
-                    inputs[active].pop();
-                    error_msg = None;
-                }
-                KeyCode::Up => {
-                    active = active.saturating_sub(1);
-                    error_msg = None;
-                }
-                KeyCode::Down => {
-                    if active < labels.len() - 1 {
-                        active += 1;
-                    }
-                    error_msg = None;
-                }
-                KeyCode::Enter => {
-                    if active < labels.len() - 1 {
-                        active += 1;
-                        error_msg = None;
-                        continue;
-                    } else {
-                        // Validate port
-                        if inputs[1].parse::<u16>().is_err() {
-                            error_msg = Some("Port must be a number 0–65535".into());
-                            continue;
-                        }
+            })
+            .interact_text()
+            .unwrap();
 
-                        // Validate refresh_interval
-                        if inputs[4].parse::<u64>().is_err() {
-                            error_msg = Some("Refresh interval must be a number".into());
-                            continue;
-                        }
-                    }
-                    break;
-                }
-                KeyCode::Esc => {
-                    // Abort
-                    ratatui::init().show_cursor()?; // Must use, otherwise cursor will not be shown
-                    // after pressing Esc
-                    ratatui::restore();
-                    // Graceful Exit with error code 0, this is an expected exit, no need to raise
-                    // an error
-                    std::process::exit(0);
-                }
-                _ => {}
-            }
+        if server_url.ends_with('/') {
+            server_url.pop();
+        }
+
+        server_port = Input::with_theme(&ColorfulTheme::default())
+            // server_port = Input::with_theme(&ColorfulTheme::default())
+            .with_prompt("Server port")
+            .with_initial_text("5000")
+            .interact_text()
+            .unwrap();
+
+        username = Input::with_theme(&ColorfulTheme::default())
+            .with_prompt("Username")
+            .interact_text()
+            .unwrap();
+
+        password = Password::with_theme(&ColorfulTheme::default())
+            .allow_empty_password(true)
+            .with_prompt("Password")
+            .with_confirmation("Confirm password", "Passwords mismatching")
+            .interact()
+            .unwrap();
+
+        refresh_interval = Input::with_theme(&ColorfulTheme::default())
+            .with_prompt("Refresh interval (in sec)")
+            .with_initial_text("60")
+            .interact_text()
+            .unwrap();
+
+        if let Some(true) = Confirm::new()
+            .with_prompt("Confirm")
+            .default(true)
+            .wait_for_newline(true)
+            .interact_opt()
+            .unwrap()
+        {
+            ok = true;
         }
     }
 
-    // All is well, restore terminal
-    ratatui::restore();
-
     // Build final config
     Ok(AppConfig {
-        server_url: inputs[0].clone().trim_end_matches('/').to_string(), // Remove trailing '/' if
-        // there is one
-        port: inputs[1].parse().unwrap_or(0),
-        username: inputs[2].clone(),
-        password: inputs[3].clone(),
-        refresh_interval: inputs[4].clone().parse().unwrap_or(60),
+        server_url,
+        server_port,
+        username,
+        password,
+        refresh_interval,
     })
 }

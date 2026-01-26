@@ -428,7 +428,10 @@ impl App {
                     " Server address      : {}",
                     server_config.server_url
                 )),
-                Line::from(format!(" Server port         : {}", server_config.port)),
+                Line::from(format!(
+                    " Server port         : {}",
+                    server_config.server_port
+                )),
                 Line::from(format!(" User name           : {}", server_config.username)),
                 Line::from(format!(
                     " Refresh interval    : {} (in seconds)",

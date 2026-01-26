@@ -10,7 +10,7 @@ fn test_config_roundtrip() {
 
     let config = AppConfig {
         server_url: "http://localhost".into(),
-        port: 5000,
+        server_port: 5000,
         username: "user".into(),
         password: "pass".into(),
         refresh_interval: 30,
@@ -20,7 +20,7 @@ fn test_config_roundtrip() {
     let loaded = AppConfig::load().unwrap();
 
     assert_eq!(config.server_url, loaded.server_url);
-    assert_eq!(config.port, loaded.port);
+    assert_eq!(config.server_port, loaded.server_port);
     assert_eq!(config.username, loaded.username);
     assert_eq!(config.password, loaded.password);
     assert_eq!(config.refresh_interval, loaded.refresh_interval);

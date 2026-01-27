@@ -27,9 +27,7 @@ cargo build --release
 The resulting executable will be in the `target/release` directory. You only need the `dstui` executable from here. Just put it anywhere you like.
 
 ## First run
-When you first run `dstui` and it does not detect a config file, a config panel shows, like this:
-
-![dstui config screenshot](screenshots/dstui_config.png)
+When you first run `dstui` and it does not detect a config file, it will ask for your server address, port, credentials and your preferred refresh interval.
 
 You can use http or https for the server address, also you can use a host name or an IP address as well.
 
@@ -57,4 +55,3 @@ The color palette looks OK for me, but I use [wezterm](https://wezterm.org/) and
 - [ ] Tests!
 - [ ] Hashing the password in the config file, so it's not stored in clear-text
 - [ ] Some kind of release? Right now you can compile it for yourself, it should work for every OS. I tested it on Mac and Linux only
-

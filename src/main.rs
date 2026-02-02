@@ -2,6 +2,7 @@ use crate::api::SynologyClient;
 use crate::app::App;
 use crate::config::{AppConfig, run_config_wizard};
 use std::error::Error;
+use syno_download_station::client::SynoDS;
 
 pub mod api;
 pub mod app;

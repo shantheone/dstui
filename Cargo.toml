@@ -27,3 +27,4 @@ reqwest = { version = "0.11.27", features = [
   "multipart",
   "socks"
 ] }
+syno-download-station = "0.4.0"

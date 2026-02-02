@@ -19,6 +19,7 @@ use ratatui::{
     crossterm::event::{KeyCode, KeyEvent},
     widgets::TableState,
 };
+use syno_download_station::client::SynoDS;
 
 /// Storing popups
 #[derive(Debug, PartialEq)]

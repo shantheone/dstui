@@ -526,6 +526,7 @@ dependencies = [
 name = "dstui"
 version = "0.5.0"
 dependencies = [
+ "anyhow",
  "chrono",
  "clipboard-rs",
  "color-eyre",

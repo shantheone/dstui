@@ -1,30 +1,30 @@
 [package]
 name = "dstui"
 version = "0.5.0"
-description = "dstui"
-authors = ["shan <shandoor@gmail.com>"]
-license = "MIT"
 edition = "2024"
+description = "dstui"
+license = "MIT"
 
 [dependencies]
-crossterm = { version = "0.28.1", features = ["event-stream"] }
-futures = "0.3.31"
-ratatui = "0.29.0"
-tokio = { version = "1.40.0", features = ["full"] }
-color-eyre = "0.6.3"
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-dialoguer = "0.12.0"
-humantime = "2.2.0"
+anyhow = "1.0.100"
 chrono = { version = "0.4.40", features = ["serde"] }
-dirs = "6.0.0"
-toml = "0.9.5"
 clipboard-rs = "0.3.0"
+color-eyre = "0.6.3"
+crossterm = { version = "0.28.1", features = ["event-stream"] }
+dialoguer = "0.12.0"
+dirs = "6.0.0"
+futures = "0.3.31"
+humantime = "2.2.0"
+ratatui = "0.29.0"
 reqwest = { version = "0.11.27", features = [
-  "json",
-  "cookies",
   "cookie_store",
+  "cookies",
+  "json",
   "multipart",
   "socks"
 ] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 syno-download-station = "0.4.0"
+tokio = { version = "1.40.0", features = ["full"] }
+toml = "0.9.5"

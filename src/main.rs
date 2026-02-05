@@ -1,4 +1,3 @@
-use crate::api::SynologyClient;
 use crate::app::App;
 use crate::config::{AppConfig, run_config_wizard};
 use std::error::Error;
@@ -27,15 +26,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     // Build client call from the config
     let endpoint = format!("{}:{}", config.server_url, config.server_port);
-    let mut client = SynologyClient::new(&endpoint);
+    let mut client = SynoDS::new(endpoint, config.username, config.password, 100)?;
 
     // Logging in
     println!("󰍂  Logging in and downloading task list. Just a sec...");
-    client.get_available_apis().await?;
-    client
-        .login(&config.username, &config.password, "DownloadStation")
-        .await
-        .map_err(|e| format!("Login failed: {e}"))?;
+    client.authorize().await?;
 
     // Launching the main app
     {
@@ -48,7 +43,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
     ratatui::restore();
 
     // Call logout method to close the connection
-    client.logout("DownloadStation").await?;
+    // TODO: implement logout method in syno-download-station crate
+    // client.logout("DownloadStation").await?;
 
     Ok(())
 }

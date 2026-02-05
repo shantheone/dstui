@@ -1,4 +1,3 @@
-use color_eyre::eyre::OptionExt;
 use futures::StreamExt;
 use ratatui::crossterm::event::Event as CrosstermEvent;
 use std::time::Duration;
@@ -109,11 +108,11 @@ impl EventHandler {
     /// This function returns an error if the sender channel is disconnected. This can happen if an
     /// error occurs in the event thread. In practice, this should not happen unless there is a
     /// problem with the underlying terminal.
-    pub async fn next(&mut self) -> color_eyre::Result<Event> {
+    pub async fn next(&mut self) -> anyhow::Result<Event> {
         self.receiver
             .recv()
             .await
-            .ok_or_eyre("Failed to receive event")
+            .ok_or(anyhow::Error::msg("Failed to receive event"))
     }
 
     /// Queue an app event to be sent to the event receiver.
@@ -149,7 +148,7 @@ impl EventTask {
     /// Runs the event thread.
     ///
     /// This function emits tick events at a fixed rate and polls for crossterm events in between.
-    async fn run(self, config: &AppConfig) -> color_eyre::Result<()> {
+    async fn run(self, config: &AppConfig) -> anyhow::Result<()> {
         let mut reader = crossterm::event::EventStream::new();
 
         let ui_tick_rate = Duration::from_secs_f64(1.0 / TICK_FPS);

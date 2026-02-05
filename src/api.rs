@@ -340,6 +340,7 @@ pub struct ExtendedDownloadTask {
     pub trackers: Vec<TrackerEntry>,
 }
 
+// TODO: map ExtendedDownloadTask fields to the new struct
 impl From<DownloadTask> for ExtendedDownloadTask {
     fn from(task: DownloadTask) -> Self {
         let ratio = task.upload_download_ratio().unwrap_or_default();

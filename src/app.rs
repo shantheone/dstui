@@ -1,9 +1,7 @@
 use std::path::PathBuf;
 
 use crate::api::ConfigData;
-use crate::api::DownloadTask;
 use crate::api::ExtendedDownloadTask;
-use crate::api::SynologyClient;
 use crate::config;
 use crate::config::AppConfig;
 use crate::event::{AppEvent, Event, EventHandler};
@@ -20,6 +18,8 @@ use ratatui::{
     widgets::TableState,
 };
 use syno_download_station::client::SynoDS;
+use syno_download_station::entities::Task;
+use syno_download_station::entities::TaskStatus;
 
 /// Storing popups
 #[derive(Debug, PartialEq)]
@@ -61,7 +61,7 @@ pub struct App {
     pub tabs: Vec<&'static str>,
     pub selected_tab: usize,
     /// Store all items in a tasklist
-    pub items: Vec<DownloadTask>,
+    pub items: Vec<Task>,
     /// Store config info received from the API
     pub extended_items: Vec<ExtendedDownloadTask>,
     /// Error popup content
@@ -122,19 +122,10 @@ impl App {
     pub async fn run(
         mut self,
         terminal: &mut DefaultTerminal,
-        client: &mut SynologyClient,
-    ) -> color_eyre::Result<()> {
+        client: &mut SynoDS,
+    ) -> anyhow::Result<()> {
         // Load tasks
         self.load_tasks(client).await;
-
-        // Get server config from the API or raise an error if its unavailable
-        self.dsconfig = match client.get_config().await {
-            Ok(cfg) => Some(cfg),
-            Err(e) => {
-                self.error_message = Some(format!("Failed to fetch server config:\n{e}"));
-                None
-            }
-        };
 
         while self.running {
             terminal.draw(|frame| frame.render_widget(&mut self, frame.area()))?;
@@ -142,6 +133,7 @@ impl App {
                 Event::Tick => self.tick(),
                 // Automatic refresh
                 Event::AutoRefresh => {
+                    client.get_tasks().await?;
                     self.refresh_tasks(client, terminal).await?;
                 }
                 Event::Crossterm(event) => {
@@ -193,7 +185,7 @@ impl App {
     }
 
     /// Handles the key events according to is a popup open or not
-    pub fn handle_key_events(&mut self, key_event: KeyEvent) -> color_eyre::Result<()> {
+    pub fn handle_key_events(&mut self, key_event: KeyEvent) -> anyhow::Result<()> {
         if self.active_popup.is_some() {
             self.handle_popup_keys(key_event)?;
         } else {
@@ -203,7 +195,7 @@ impl App {
     }
 
     /// Handles the key events when a popup is open
-    fn handle_popup_keys(&mut self, key_event: KeyEvent) -> color_eyre::Result<()> {
+    fn handle_popup_keys(&mut self, key_event: KeyEvent) -> anyhow::Result<()> {
         match key_event.code {
             KeyCode::Esc | KeyCode::Char('q') => {
                 self.close_all_popups();
@@ -252,7 +244,7 @@ impl App {
     }
 
     /// Handles global keys
-    fn handle_global_keys(&mut self, key_event: KeyEvent) -> color_eyre::Result<()> {
+    fn handle_global_keys(&mut self, key_event: KeyEvent) -> anyhow::Result<()> {
         match key_event.code {
             KeyCode::Esc | KeyCode::Char('q') => {
                 self.events.send(AppEvent::Quit);
@@ -383,7 +375,7 @@ impl App {
     }
 
     // Loads tasks from DownloadStation
-    pub async fn load_tasks(&mut self, client: &SynologyClient) {
+    pub async fn load_tasks(&mut self, client: &SynoDS) {
         // Storing last active task id for restoring after the refresh
         let prev_id = self
             .selected_row
@@ -391,8 +383,8 @@ impl App {
             // .and_then(|i| self.items.get(i).map(|t| t.id.clone()));
             .and_then(|i| self.items.get(i).map(|t| t.id.clone()));
 
-        match client.list_download_tasks().await {
-            Ok(tasks) => self.items = tasks,
+        match client.get_tasks().await {
+            Ok(tasks) => self.items = tasks.task,
             Err(e) => {
                 self.error_message = Some(format!("Failed to fetch tasks: {e}\n"));
                 self.items.clear();
@@ -414,9 +406,9 @@ impl App {
 
     pub async fn refresh_tasks(
         &mut self,
-        client: &SynologyClient,
+        client: &SynoDS,
         terminal: &mut DefaultTerminal,
-    ) -> color_eyre::Result<()> {
+    ) -> anyhow::Result<()> {
         self.refreshing_tasks = true;
         self.redraw(terminal)?;
         self.load_tasks(client).await;
@@ -425,7 +417,8 @@ impl App {
         Ok(())
     }
 
-    pub fn extend_task_info(tasks: Vec<DownloadTask>) -> Vec<ExtendedDownloadTask> {
+    // TODO: map ExtendedDownloadTask fields to the new struct
+    pub fn extend_task_info(tasks: Vec<Task>) -> Vec<ExtendedDownloadTask> {
         tasks.into_iter().map(ExtendedDownloadTask::from).collect()
     }
 
@@ -438,12 +431,13 @@ impl App {
     }
 
     // Add task from url
-    pub async fn add_task_from_url(&mut self, client: &mut SynologyClient) {
+    pub async fn add_task_from_url(&mut self, client: &mut SynoDS) {
         // Get text content of clipboard
         let clipboard_text = get_clipboard();
         // Validate if it's a URL
         match validate_url(&clipboard_text) {
-            Ok(()) => match client.create_task_from_url(&clipboard_text).await {
+            // TODO: get default destination for the create_task function instead the hardcoded one
+            Ok(()) => match client.create_task(&clipboard_text, "!Downloads").await {
                 Ok(()) => self.load_tasks(client).await,
                 Err(e) => {
                     self.error_message = Some(format!("Failed to add task: {e}"));
@@ -464,9 +458,12 @@ impl App {
     }
 
     /// Add task from file
-    pub async fn add_task_from_file(&mut self, client: &mut SynologyClient, file_path: String) {
+    pub async fn add_task_from_file(&mut self, client: &mut SynoDS, file_path: String) {
         if let Ok(file_data) = get_file_content(file_path.clone()) {
-            if let Err(e) = client.create_task_from_file(file_path, &file_data).await {
+            if let Err(e) = client
+                .create_task_from_file(&file_data, &file_path, "!Downloads")
+                .await
+            {
                 self.error_message = Some(format!("Failed to add task: {e}"));
                 self.show_error_popup();
             } else {
@@ -479,15 +476,16 @@ impl App {
         }
     }
 
-    pub async fn pause_task(&mut self, client: &mut SynologyClient) {
+    pub async fn pause_task(&mut self, client: &mut SynoDS) {
         let idx = self.selected_table_row_index();
         let id = &self.items[idx].id.clone();
 
-        let is_paused = self.items[idx].status.label() == "paused";
+        let is_paused = matches!(self.items[idx].status, TaskStatus::Paused);
+
         let result = if is_paused {
-            client.resume_task(id).await
+            client.resume(id).await.map(|_| ())
         } else {
-            client.pause_task(id).await
+            client.pause(id).await.map(|_| ())
         };
 
         if let Err(e) = result {
@@ -498,11 +496,11 @@ impl App {
         }
     }
 
-    pub async fn delete_task(&mut self, client: &mut SynologyClient) {
+    pub async fn delete_task(&mut self, client: &mut SynoDS) {
         let idx = self.selected_table_row_index();
         let id = &self.items[idx].id.clone();
 
-        let result = client.delete_task(id).await;
+        let result = client.delete_task(id, true).await;
 
         if let Err(e) = result {
             self.error_message = Some(format!("Delete task failed for: {id}\nError: {e}",));

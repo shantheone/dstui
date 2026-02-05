@@ -54,6 +54,7 @@ impl Widget for &mut App {
         let header = Row::new(self.headers.clone())
             .style(Style::default().fg(Color::White).bg(Color::DarkGray).bold());
 
+        // TODO: map ExtendedDownloadTask fields to the new struct
         let download_tasks = App::extend_task_info(self.items.clone());
         let rows = download_tasks.iter().map(|item| {
             let cells = item.to_row_cells();
@@ -402,7 +403,7 @@ impl App {
     pub fn redraw<B: ratatui::backend::Backend>(
         &mut self,
         terminal: &mut Terminal<B>,
-    ) -> color_eyre::Result<()> {
+    ) -> anyhow::Result<()> {
         terminal.draw(|frame| {
             // Delegate to render method on `App`
             frame.render_widget(self, frame.area());

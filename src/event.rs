@@ -1,13 +1,11 @@
-use color_eyre::eyre::OptionExt;
-use futures::StreamExt;
+use anyhow::{Context, Result};
+use futures::{FutureExt, StreamExt};
 use ratatui::crossterm::event::Event as CrosstermEvent;
 use std::time::Duration;
 use tokio::sync::mpsc;
 
-use crate::config::AppConfig;
-
 /// The frequency at which tick events are emitted.
-const TICK_FPS: f64 = 30.0;
+pub const TICK_FPS: f64 = 30.0;
 
 /// Representation of all possible events.
 #[derive(Clone, Debug)]
@@ -18,8 +16,6 @@ pub enum Event {
     /// event. e.g. polling exernal systems, updating animations, or rendering the UI based on a
     /// fixed frame rate.
     Tick,
-    /// Backgroung refresh events
-    AutoRefresh,
     /// Crossterm events.
     ///
     /// These events are emitted by the terminal.
@@ -35,50 +31,32 @@ pub enum Event {
 /// You can extend this enum with your own custom events.
 #[derive(Clone, Debug)]
 pub enum AppEvent {
-    /// Select next row in the table
-    SelectNextRow,
-    /// Select previous row in the table
-    SelectPreviousRow,
-    /// Select next row in the filepicker
-    SelectNextRowFilePicker,
-    /// Select previous row in the filepicker
-    SelectPreviousRowFilePicker,
-    /// Show help popup
-    Help,
-    /// Show server info popup
-    ServerInfo,
-    /// Show add task from URL popup
-    ShowAddTaskFromUrl,
-    /// Show add task file picker
-    ShowAddTaskFromFile,
-    /// Send in the actual new task
-    AddTaskFromUrl,
-    /// Send in the task from file
-    AddTaskFromFile,
-    /// Pause or resume task
-    PauseResumeTask,
-    /// Delete task
-    DeleteTask,
-    /// Show error
-    ShowError,
-    /// Show confirmation
-    ShowDeleteConfirmation,
-    /// Manual refresh
-    ManualRefresh,
-    /// Scroll down in popups
-    ScrollDown,
-    /// Scroll up in popups
-    ScrollUp,
-    /// Scroll down in info window
-    ScrollDownInfo,
-    /// Scroll up in info window
-    ScrollUpInfo,
-    /// Select next tab in the info window
-    SelectNextTab,
-    /// Select previous tab in the info window
-    SelectPreviousTab,
-    /// Quit the application
+    /// Show popup
+    PopUp,
+    /// Quit the application.
     Quit,
+    /// Select next item in the active table
+    Next,
+    /// Select next item in the active table
+    Previous,
+    /// Refresh task event
+    Refresh,
+    /// Filepicker events
+    OpenFilePicker,
+    SubmitFile,
+    /// Add by URL text input events
+    OpenUrlInput,
+    SubmitUrl,
+    /// Toggle task status (pause, resume)
+    ToggleTask,
+    /// Complete task
+    CompleteTask,
+    /// Clear completed tasks
+    ClearCompleted,
+    /// Task deletion and confirmation events
+    DeleteTask,
+    ConfirmAction,
+    CancelAction,
 }
 
 /// Terminal event handler.
@@ -92,11 +70,10 @@ pub struct EventHandler {
 
 impl EventHandler {
     /// Constructs a new instance of [`EventHandler`] and spawns a new thread to handle events.
-    pub fn new(config: &AppConfig) -> Self {
+    pub fn new() -> Self {
         let (sender, receiver) = mpsc::unbounded_channel();
         let actor = EventTask::new(sender.clone());
-        let config = config.clone(); // make sure AppConfig derives Clone
-        tokio::spawn(async move { actor.run(&config).await });
+        tokio::spawn(async { actor.run().await });
         Self { sender, receiver }
     }
 
@@ -109,11 +86,11 @@ impl EventHandler {
     /// This function returns an error if the sender channel is disconnected. This can happen if an
     /// error occurs in the event thread. In practice, this should not happen unless there is a
     /// problem with the underlying terminal.
-    pub async fn next(&mut self) -> color_eyre::Result<Event> {
+    pub async fn next(&mut self) -> Result<Event> {
         self.receiver
             .recv()
             .await
-            .ok_or_eyre("Failed to receive event")
+            .context("Failed to receive event")
     }
 
     /// Queue an app event to be sent to the event receiver.
@@ -129,8 +106,7 @@ impl EventHandler {
 
 impl Default for EventHandler {
     fn default() -> Self {
-        let config = AppConfig::load().expect("Failed to load config");
-        Self::new(&config)
+        Self::new()
     }
 }
 
@@ -149,33 +125,25 @@ impl EventTask {
     /// Runs the event thread.
     ///
     /// This function emits tick events at a fixed rate and polls for crossterm events in between.
-    async fn run(self, config: &AppConfig) -> color_eyre::Result<()> {
+    async fn run(self) -> Result<()> {
+        let tick_rate = Duration::from_secs_f64(1.0 / TICK_FPS);
         let mut reader = crossterm::event::EventStream::new();
-
-        let ui_tick_rate = Duration::from_secs_f64(1.0 / TICK_FPS);
-        let refresh_tick_rate = Duration::from_secs(config.refresh_interval.max(1));
-
-        let mut ui_tick = tokio::time::interval(ui_tick_rate);
-        let mut refresh_tick = tokio::time::interval(refresh_tick_rate);
-
+        let mut tick = tokio::time::interval(tick_rate);
         loop {
+            let tick_delay = tick.tick();
+            let crossterm_event = reader.next().fuse();
             tokio::select! {
-                _ = self.sender.closed() => break,
-
-                _ = ui_tick.tick() => {
-                    self.send(Event::Tick);
-                }
-
-                _ = refresh_tick.tick() => {
-                    self.send(Event::AutoRefresh);
-                }
-
-                Some(Ok(evt)) = reader.next() => {
-                    self.send(Event::Crossterm(evt));
-                }
-            }
+              _ = self.sender.closed() => {
+                break;
+              }
+              _ = tick_delay => {
+                self.send(Event::Tick);
+              }
+              Some(Ok(evt)) = crossterm_event => {
+                self.send(Event::Crossterm(evt));
+              }
+            };
         }
-
         Ok(())
     }
 

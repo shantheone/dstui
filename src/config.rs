@@ -1,122 +1,67 @@
-use dialoguer::{Confirm, Input, Password, theme::ColorfulTheme};
+use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
-use std::{
-    fs,
-    io::{self},
-    path::PathBuf,
-};
+use std::path::PathBuf;
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct AppConfig {
-    pub server_url: String,
-    pub server_port: u16,
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Config {
+    pub connection: ConnectionConfig,
+    pub downloads: DownloadConfig,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ConnectionConfig {
+    pub url: String,
     pub username: String,
     pub password: String,
-    pub refresh_interval: u64,
+    pub accept_invalid_certs: bool,
 }
 
-impl AppConfig {
-    pub fn config_path() -> PathBuf {
-        dirs::config_dir() // Use the OS agnostic config dir on all systems
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join("dstui")
-            .join("config.toml")
-    }
+#[derive(Debug, Serialize, Deserialize)]
+pub struct DownloadConfig {
+    pub destination: String,
+    #[serde(default = "default_refresh_interval")]
+    pub refresh_interval: Option<u64>, // in seconds, None = disabled
+}
 
-    pub fn load() -> Option<Self> {
-        let path = Self::config_path();
-        fs::read_to_string(&path)
-            .ok()
-            .and_then(|s| toml::from_str(&s).ok())
-    }
+fn default_refresh_interval() -> Option<u64> {
+    Some(30)
+}
 
-    pub fn save(&self) -> io::Result<()> {
-        let path = Self::config_path();
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)?;
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            connection: ConnectionConfig {
+                url: String::from("http://your-diskstation:5000"),
+                username: String::from("admin"),
+                password: String::new(),
+                accept_invalid_certs: false,
+            },
+            downloads: DownloadConfig {
+                destination: String::from("downloads"),
+                refresh_interval: Some(30),
+            },
         }
-        fs::write(path, toml::to_string_pretty(self).unwrap())
     }
 }
 
-pub fn run_config_wizard() -> io::Result<AppConfig> {
-    let mut server_url = String::new();
-    let mut server_port: u16 = 5000;
-    let mut username = String::new();
-    let mut password = String::new();
-    let mut refresh_interval: u64 = 60;
+pub fn config_path() -> Result<PathBuf> {
+    let config_dir = dirs::config_dir()
+        .context("Could not determine config directory")?
+        .join("dstui");
+    Ok(config_dir.join("config.toml"))
+}
 
-    println!("- Thank you for trying dstui!");
-    println!("! Configuration file not found. Please enter the following details:\n");
+pub fn load_config() -> Result<Config> {
+    let path = config_path()?;
 
-    let mut ok = false;
-
-    while !ok {
-        server_url = Input::with_theme(&ColorfulTheme::default())
-            .with_prompt("Server URL")
-            .with_initial_text("http://")
-            .validate_with({
-                move |input: &String| -> Result<(), &str> {
-                    if input.starts_with("http://")
-                        || input.starts_with("https://")
-                            && input != "http://"
-                            && input != "https://"
-                    {
-                        Ok(())
-                    } else {
-                        Err("Please enter a valid URL including http or https")
-                    }
-                }
-            })
-            .interact_text()
-            .unwrap();
-
-        if server_url.ends_with('/') {
-            server_url.pop();
-        }
-
-        server_port = Input::with_theme(&ColorfulTheme::default())
-            // server_port = Input::with_theme(&ColorfulTheme::default())
-            .with_prompt("Server port")
-            .with_initial_text("5000")
-            .interact_text()
-            .unwrap();
-
-        username = Input::with_theme(&ColorfulTheme::default())
-            .with_prompt("Username")
-            .interact_text()
-            .unwrap();
-
-        password = Password::with_theme(&ColorfulTheme::default())
-            .allow_empty_password(true)
-            .with_prompt("Password")
-            .with_confirmation("Confirm password", "Passwords mismatching")
-            .interact()
-            .unwrap();
-
-        refresh_interval = Input::with_theme(&ColorfulTheme::default())
-            .with_prompt("Refresh interval (in sec)")
-            .with_initial_text("60")
-            .interact_text()
-            .unwrap();
-
-        if let Some(true) = Confirm::new()
-            .with_prompt("Confirm")
-            .default(true)
-            .wait_for_newline(true)
-            .interact_opt()
-            .unwrap()
-        {
-            ok = true;
-        }
+    if !path.exists() {
+        anyhow::bail!("no_config"); // sentinel value
     }
 
-    // Build final config
-    Ok(AppConfig {
-        server_url,
-        server_port,
-        username,
-        password,
-        refresh_interval,
-    })
+    let contents = std::fs::read_to_string(&path)
+        .context(format!("Failed to read config file at {}", path.display()))?;
+    let config: Config = toml::from_str(&contents)
+        .context("Failed to parse config file — check your TOML syntax")?;
+
+    Ok(config)
 }

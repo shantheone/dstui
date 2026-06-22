@@ -1,94 +1,145 @@
-use std::path::PathBuf;
-
-use crate::api::ConfigData;
-use crate::api::DownloadTask;
-use crate::api::ExtendedDownloadTask;
-use crate::api::SynologyClient;
-use crate::config;
-use crate::config::AppConfig;
-use crate::event::{AppEvent, Event, EventHandler};
-use crate::ui::get_selected_file;
-use crate::util::FileAttributes;
-use crate::util::get_file_content;
-use crate::util::get_files;
-use crate::util::{get_clipboard, validate_url};
-
-use ratatui::widgets::ScrollbarState;
+use crate::config::{Config, config_path};
+use crate::event::{AppEvent, Event, EventHandler, TICK_FPS};
 use ratatui::{
     DefaultTerminal,
-    crossterm::event::{KeyCode, KeyEvent},
-    widgets::TableState,
+    crossterm::event::{KeyCode, KeyEvent, KeyModifiers},
+    crossterm::{cursor, execute},
+    style::{Color, Style},
+    widgets::{Block, BorderType, TableState},
 };
+use ratatui_explorer::{FileExplorer, FileExplorerBuilder, Theme};
+use std::io::stdout;
+use syno_download_station::{
+    client::SynoDS,
+    entities::{Task, TaskStatus},
+};
+use tui_input::Input;
+use tui_input::backend::crossterm::EventHandler as InputEventHandler;
 
-/// Storing popups
-#[derive(Debug, PartialEq)]
-pub enum Popup {
-    Help,
-    AddTaskFromUrl,
-    AddTaskFromFile,
-    DeleteConfirmation,
-    ServerInfo,
-    Error,
+// Spinner frames
+pub const SPINNER_FRAMES: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+
+#[derive(Debug, PartialEq, Clone)]
+pub enum SortColumn {
+    Name,
+    Size,
+    Downloaded,
+    Uploaded,
+    Progress,
+    UploadSpeed,
+    DownloadSpeed,
+    Ratio,
+    Status,
 }
 
-/// Application.
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Clone)]
+pub enum SortOrder {
+    Ascending,
+    Descending,
+}
+
+#[derive(Debug, PartialEq)]
+pub enum ActivePanel {
+    Tasks,
+    Info,
+}
+
+/// Enum for handling the popups
+#[derive(Debug, Clone)]
+pub struct PopupState {
+    pub lines: Vec<String>,
+    pub error: bool, // true = red border, false = normal
+    pub scroll: usize,
+}
+
+/// Enum for confirmation
+#[derive(Debug, Clone)]
+pub enum PendingAction {
+    DeleteTask(String), // stores the task id
+}
+
 pub struct App {
-    /// Is the application running?
     pub running: bool,
-    /// Refreshing tasks
-    pub refreshing_tasks: bool,
-    /// File path for add_task_from_file()
-    pub file_path: PathBuf,
-    /// So we will be able to handle the table selection state
-    pub selected_row: TableState,
-    /// So we will be able to handle the filepicker selection state
-    pub selected_row_filepicker: TableState,
-    /// Keep a list of files
-    pub dir_list: Vec<FileAttributes>,
-    /// Event handler.
-    pub events: EventHandler,
-    /// Store scroll offset for popups
-    pub popup_scroll_position: usize,
-    /// Headers for the tasks panel
+    pub active_panel: ActivePanel,
     pub headers: Vec<&'static str>,
-    /// Store scroll offset for info panel
-    pub info_panel_scroll_position: usize,
-    /// Info panel ScrollBarState
-    pub info_panel_scrollbarstate: ratatui::widgets::ScrollbarState,
-    /// Tabs for the info panel
+    pub refreshing_tasks: bool,
+    pub events: EventHandler,
     pub tabs: Vec<&'static str>,
     pub selected_tab: usize,
-    /// Store all items in a tasklist
-    pub items: Vec<DownloadTask>,
-    /// Store config info received from the API
-    pub extended_items: Vec<ExtendedDownloadTask>,
-    /// Error popup content
-    pub error_message: Option<String>,
-    /// Store config info received from the API
-    pub dsconfig: Option<ConfigData>,
-    /// Store active popup information
-    pub active_popup: Option<Popup>,
+    pub selected_task: TableState,
+    pub selected_file: TableState,
+    pub selected_peer: TableState,
+    pub tasks: Vec<Task>,
+    pub client: Option<SynoDS>,
+    pub destination: String,
+    pub tick_count: u64,
+    pub refresh_interval: Option<u64>, // number of ticks between refreshes, None means disabled
+    pub tracker_scroll: usize,
+    pub peer_scroll: usize,
+    pub file_scroll: usize,
+    pub tracker_count: usize,
+    pub peer_count: usize,
+    pub file_count: usize,
+    pub file_explorer: Option<FileExplorer>,
+    pub url_input: Option<Input>,
+    pub popup: Option<PopupState>,
+    pub url_input_cursor_pos: Option<(u16, u16)>,
+    // Tracking scrollable areas
+    pub popup_inner_height: usize,
+    pub tracker_inner_height: usize,
+    pub peer_inner_height: usize,
+    pub file_inner_height: usize,
+    pub pending_action: Option<PendingAction>,
+    pub spinner_frame: usize,
+    pub loading: bool,
+    pub config_path: String,
+    pub sort_column: SortColumn,
+    pub sort_order: SortOrder,
 }
 
-impl Default for App {
-    fn default() -> Self {
-        // Select the first row by default in the table
-        let mut selected_row = TableState::default();
-        selected_row.select(Some(0));
-        let config = AppConfig::load().expect("Failed to load config file.");
+fn move_next(state: &mut TableState, row_count: usize) {
+    if row_count == 0 {
+        return;
+    }
+    let next = match state.selected() {
+        Some(i) => (i + 1).min(row_count - 1),
+        None => 0,
+    };
+    state.select(Some(next));
+}
 
-        Self {
+fn move_previous(state: &mut TableState) {
+    let prev = match state.selected() {
+        Some(0) | None => 0,
+        Some(i) => i - 1,
+    };
+    state.select(Some(prev));
+}
+
+impl App {
+    pub async fn new(config: Config) -> anyhow::Result<Self> {
+        let client = SynoDS::builder()
+            .url(&config.connection.url)
+            .username(&config.connection.username)
+            .password(&config.connection.password)
+            .danger_accept_invalid_certs(config.connection.accept_invalid_certs)
+            .build()?;
+
+        client.authorize().await?;
+
+        let config_path = config_path()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|_| "unknown".to_string());
+
+        let destination = config.downloads.destination.clone();
+        let refresh_interval = config
+            .downloads
+            .refresh_interval
+            .filter(|&s| s > 0)
+            .map(|s| (s as f64 * TICK_FPS) as u64);
+
+        let mut app = Self {
             running: true,
-            refreshing_tasks: false,
-            file_path: PathBuf::new(),
-            selected_row,
-            selected_row_filepicker: TableState::default(),
-            dir_list: get_files(),
-            events: EventHandler::new(&config),
-            popup_scroll_position: 0,
-            info_panel_scroll_position: 0,
-            info_panel_scrollbarstate: ScrollbarState::new(0),
             headers: vec![
                 "Name",
                 "Size",
@@ -100,419 +151,758 @@ impl Default for App {
                 "Ratio",
                 "Status",
             ],
-            tabs: vec!["General", "Transfer", "Tracker", "Peers", "File"],
+            active_panel: ActivePanel::Tasks,
+            refreshing_tasks: false,
+            events: EventHandler::new(),
+            tabs: vec!["General", "Transfer", "Tracker", "Peers", "Files"],
             selected_tab: 0,
-            items: vec![],
-            extended_items: vec![],
-            error_message: None,
-            dsconfig: None,
-            active_popup: None,
-        }
-    }
-}
-
-impl App {
-    /// Constructs a new instance of App.
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Run the application's main loop.
-    pub async fn run(
-        mut self,
-        terminal: &mut DefaultTerminal,
-        client: &mut SynologyClient,
-    ) -> color_eyre::Result<()> {
-        // Load tasks
-        self.load_tasks(client).await;
-
-        // Get server config from the API or raise an error if its unavailable
-        self.dsconfig = match client.get_config().await {
-            Ok(cfg) => Some(cfg),
-            Err(e) => {
-                self.error_message = Some(format!("Failed to fetch server config:\n{e}"));
-                None
-            }
+            selected_task: TableState::default(),
+            selected_file: TableState::default(),
+            selected_peer: TableState::default(),
+            tasks: vec![],
+            client: Some(client),
+            destination,
+            tick_count: 0,
+            refresh_interval,
+            tracker_scroll: 0,
+            peer_scroll: 0,
+            file_scroll: 0,
+            tracker_count: 0,
+            peer_count: 0,
+            file_count: 0,
+            file_explorer: None,
+            url_input: None,
+            popup: None,
+            url_input_cursor_pos: None,
+            // Scrollable areas custom defaults
+            popup_inner_height: 5,
+            tracker_inner_height: 5,
+            peer_inner_height: 5,
+            file_inner_height: 5,
+            pending_action: None,
+            spinner_frame: 0,
+            loading: false,
+            config_path,
+            sort_column: SortColumn::Name,
+            sort_order: SortOrder::Ascending,
         };
 
+        app.refresh_tasks().await?;
+        Ok(app)
+    }
+
+    pub async fn run(mut self, mut terminal: DefaultTerminal) -> anyhow::Result<()> {
         while self.running {
             terminal.draw(|frame| frame.render_widget(&mut self, frame.area()))?;
-            match self.events.next().await? {
-                Event::Tick => self.tick(),
-                // Automatic refresh
-                Event::AutoRefresh => {
-                    self.refresh_tasks(client, terminal).await?;
+
+            // Show blinking cursor when URL input is active, hide otherwise
+            if self.url_input.is_some() {
+                execute!(stdout(), cursor::Show, cursor::EnableBlinking)?;
+            } else {
+                execute!(stdout(), cursor::Hide)?;
+            }
+
+            if self.url_input.is_some() {
+                if let Some((x, y)) = self.url_input_cursor_pos {
+                    execute!(
+                        stdout(),
+                        cursor::Show,
+                        cursor::EnableBlinking,
+                        cursor::MoveTo(x, y)
+                    )?;
                 }
-                Event::Crossterm(event) => {
-                    if let crossterm::event::Event::Key(key_event) = event {
+            } else {
+                execute!(stdout(), cursor::Hide)?;
+            }
+
+            match self.events.next().await? {
+                Event::Tick => self.tick().await?,
+                Event::Crossterm(event) => match event {
+                    crossterm::event::Event::Key(key_event)
+                        if key_event.kind == crossterm::event::KeyEventKind::Press =>
+                    {
                         self.handle_key_events(key_event)?
                     }
-                }
+                    _ => {}
+                },
                 Event::App(app_event) => match app_event {
-                    AppEvent::SelectNextRow => self.select_next_row(),
-                    AppEvent::SelectPreviousRow => self.select_previous_row(),
-                    AppEvent::SelectNextRowFilePicker => self.select_next_row_filepicker(),
-                    AppEvent::SelectPreviousRowFilePicker => self.select_previous_row_filepicker(),
-                    AppEvent::Help => self.show_help_popup(),
-                    AppEvent::ServerInfo => self.show_server_info_popup(),
-                    AppEvent::ShowAddTaskFromUrl => self.show_add_task_popup(),
-                    AppEvent::ShowAddTaskFromFile => self.show_add_task_file_picker(),
-                    AppEvent::ShowError => self.show_error_popup(),
-                    AppEvent::ShowDeleteConfirmation => self.show_delete_confirmation_popup(),
-                    AppEvent::AddTaskFromUrl => self.add_task_from_url(client).await,
-                    AppEvent::AddTaskFromFile => {
-                        if let Some(selected_file) =
-                            get_selected_file(&self.dir_list, &self.selected_row_filepicker)
-                        {
-                            self.add_task_from_file(client, selected_file.filepath.clone())
-                                .await
+                    AppEvent::Quit => self.quit(),
+                    AppEvent::Refresh => {
+                        match self.refresh_tasks().await {
+                            Ok(_) => {}
+                            Err(e) => {
+                                self.show_popup(
+                                    vec!["Failed to refresh tasks:".into(), e.to_string()],
+                                    true,
+                                );
+                            }
+                        }
+                        self.loading = false;
+                    }
+                    AppEvent::Next => self.next_task_row(),
+                    AppEvent::Previous => self.previous_task_row(),
+                    AppEvent::OpenFilePicker => self.open_file_picker(),
+                    AppEvent::SubmitFile => {
+                        if let Err(e) = self.submit_selected_file().await {
+                            self.show_popup(
+                                vec!["Failed to submit file:".into(), e.to_string()],
+                                true,
+                            );
                         }
                     }
-                    AppEvent::PauseResumeTask => {
-                        self.pause_task(client).await;
-                        self.events.send(AppEvent::ManualRefresh);
+                    AppEvent::OpenUrlInput => self.open_url_input(),
+                    AppEvent::SubmitUrl => {
+                        if let Err(e) = self.submit_url().await {
+                            self.show_popup(
+                                vec!["Failed to submit URL:".into(), e.to_string()],
+                                true,
+                            );
+                        }
                     }
-                    AppEvent::DeleteTask => {
-                        self.delete_task(client).await;
-                        self.events.send(AppEvent::ManualRefresh);
+                    AppEvent::ToggleTask => {
+                        if let Err(e) = self.toggle_task().await {
+                            self.show_popup(
+                                vec!["Failed to toggle task status:".into(), e.to_string()],
+                                true,
+                            );
+                        }
                     }
-                    // AppEvent::DeleteTask => self.add_task_from_url(client).await,
-                    AppEvent::ManualRefresh => self.refresh_tasks(client, terminal).await?,
-                    AppEvent::ScrollDown => self.scroll_down(),
-                    AppEvent::ScrollUp => self.scroll_up(),
-                    AppEvent::ScrollDownInfo => self.scroll_down_info(),
-                    AppEvent::ScrollUpInfo => self.scroll_up_info(),
-                    AppEvent::SelectNextTab => self.select_next_tab(),
-                    AppEvent::SelectPreviousTab => self.select_previous_tab(),
-                    AppEvent::Quit => self.quit(),
+                    AppEvent::CompleteTask => {
+                        if let Err(e) = self.complete_task().await {
+                            self.show_popup(
+                                vec!["Failed to complete task:".into(), e.to_string()],
+                                true,
+                            );
+                        }
+                    }
+                    AppEvent::ClearCompleted => {
+                        if let Err(e) = self.clear_completed().await {
+                            self.show_popup(
+                                vec!["Failed to clear completed task(s):".into(), e.to_string()],
+                                true,
+                            );
+                        }
+                    }
+                    AppEvent::PopUp => self.show_popup(
+                        vec![
+                            String::new(),
+                            "Help:".into(),
+                            "j / k     — navigate tasks and info panel rows, scroll help text"
+                                .into(),
+                            "p         — pause / resume selected task".into(),
+                            "c         — complete selected task".into(),
+                            "C         — clear completed tasks".into(),
+                            "a         — add file (.torrent, .nzb and .txt is supported)".into(),
+                            "A         — add task by URL".into(),
+                            "d         — delete selected task".into(),
+                            "r         — manually refresh tasks".into(),
+                            "1-9       — sort by column (again to reverse)".into(),
+                            "Tab       — switch panels".into(),
+                            "?         — toggle this help popup".into(),
+                            "q / Esc   — quit".into(),
+                            String::new(),
+                            format!("Config:   {}", self.config_path),
+                        ],
+                        false,
+                    ),
+                    AppEvent::DeleteTask => self.request_delete_task(),
+                    AppEvent::ConfirmAction => self.confirm_action().await?,
+                    AppEvent::CancelAction => self.cancel_action(),
                 },
             }
         }
+
+        // Make sure cursor is restored when app exits
+        execute!(stdout(), cursor::Show, cursor::EnableBlinking)?;
         Ok(())
     }
 
-    /// Handles the key events according to is a popup open or not
-    pub fn handle_key_events(&mut self, key_event: KeyEvent) -> color_eyre::Result<()> {
-        if self.active_popup.is_some() {
-            self.handle_popup_keys(key_event)?;
-        } else {
-            self.handle_global_keys(key_event)?;
+    pub fn handle_key_events(&mut self, key_event: KeyEvent) -> anyhow::Result<()> {
+        // Confirmation popup blocks all other input
+        if self.pending_action.is_some() {
+            match key_event.code {
+                KeyCode::Char('y') | KeyCode::Enter => self.events.send(AppEvent::ConfirmAction),
+                KeyCode::Char('n') | KeyCode::Esc => self.events.send(AppEvent::CancelAction),
+                _ => {}
+            }
+            return Ok(());
         }
-        Ok(())
-    }
 
-    /// Handles the key events when a popup is open
-    fn handle_popup_keys(&mut self, key_event: KeyEvent) -> color_eyre::Result<()> {
+        // Popup is the next in the blocking chain
+        if let Some(popup) = &mut self.popup {
+            match key_event.code {
+                KeyCode::Esc => self.close_popup(),
+                KeyCode::Char('j') => {
+                    let max = popup.lines.len().saturating_sub(self.popup_inner_height);
+                    popup.scroll = (popup.scroll + 1).min(max);
+                }
+                KeyCode::Char('k') => {
+                    popup.scroll = popup.scroll.saturating_sub(1);
+                }
+                _ => {}
+            }
+            return Ok(());
+        }
+
+        // Then we will handle the file picker
+        if let Some(explorer) = &mut self.file_explorer {
+            match key_event.code {
+                KeyCode::Enter => self.events.send(AppEvent::SubmitFile),
+                KeyCode::Esc => self.file_explorer = None,
+                _ => {
+                    explorer
+                        .handle(&crossterm::event::Event::Key(key_event))
+                        .unwrap();
+                }
+            }
+            return Ok(());
+        }
+
+        // Then the URL input gets priority when open
+        if self.url_input.is_some() {
+            match key_event.code {
+                KeyCode::Enter => self.events.send(AppEvent::SubmitUrl),
+                KeyCode::Esc => self.url_input = None,
+                _ => {
+                    if let Some(input) = &mut self.url_input {
+                        input.handle_event(&crossterm::event::Event::Key(key_event));
+                    }
+                }
+            }
+            return Ok(());
+        }
+
+        // Finally, normal key handling
         match key_event.code {
-            KeyCode::Esc | KeyCode::Char('q') => {
-                self.close_all_popups();
+            KeyCode::Esc | KeyCode::Char('q') => self.events.send(AppEvent::Quit),
+            KeyCode::Char('c' | 'C') if key_event.modifiers == KeyModifiers::CONTROL => {
+                self.events.send(AppEvent::Quit)
             }
-            KeyCode::Char('j') => {
-                if self.active_popup == Some(Popup::AddTaskFromFile) {
-                    self.events.send(AppEvent::SelectNextRowFilePicker);
-                } else {
-                    self.events.send(AppEvent::ScrollDown);
+            KeyCode::Char('?') => self.events.send(AppEvent::PopUp),
+            KeyCode::Char('r') => self.events.send(AppEvent::Refresh),
+            KeyCode::Char('a') => self.events.send(AppEvent::OpenFilePicker),
+            KeyCode::Char('A') => self.events.send(AppEvent::OpenUrlInput),
+            KeyCode::Char('j') if self.active_panel == ActivePanel::Tasks => {
+                self.events.send(AppEvent::Next)
+            }
+            KeyCode::Char('k') if self.active_panel == ActivePanel::Tasks => {
+                self.events.send(AppEvent::Previous)
+            }
+            KeyCode::Char('h') if self.active_panel == ActivePanel::Info => {
+                self.selected_tab = self.selected_tab.saturating_sub(1);
+            }
+            KeyCode::Char('l') if self.active_panel == ActivePanel::Info => {
+                self.selected_tab = (self.selected_tab + 1).min(self.tabs.len() - 1);
+            }
+            KeyCode::Char('j') if self.active_panel == ActivePanel::Info => {
+                self.scroll_info_down();
+            }
+            KeyCode::Char('k') if self.active_panel == ActivePanel::Info => {
+                self.scroll_info_up();
+            }
+            KeyCode::Char('p') => self.events.send(AppEvent::ToggleTask),
+            KeyCode::Char('c') => self.events.send(AppEvent::CompleteTask),
+            KeyCode::Char('C') => self.events.send(AppEvent::ClearCompleted),
+            KeyCode::Tab => {
+                self.active_panel = match self.active_panel {
+                    ActivePanel::Tasks => ActivePanel::Info,
+                    ActivePanel::Info => ActivePanel::Tasks,
                 }
             }
-            KeyCode::Char('k') => {
-                if self.active_popup == Some(Popup::AddTaskFromFile) {
-                    self.events.send(AppEvent::SelectPreviousRowFilePicker);
-                } else {
-                    self.events.send(AppEvent::ScrollUp);
-                }
-            }
-            KeyCode::Down if self.active_popup == Some(Popup::AddTaskFromFile) => {
-                self.events.send(AppEvent::SelectNextRowFilePicker);
-            }
-            KeyCode::Up if self.active_popup == Some(Popup::AddTaskFromFile) => {
-                self.events.send(AppEvent::SelectPreviousRowFilePicker);
-            }
-            KeyCode::Char('y') | KeyCode::Char('Y')
-                if self.active_popup == Some(Popup::DeleteConfirmation) =>
-            {
-                self.events.send(AppEvent::DeleteTask);
-                self.close_all_popups();
-            }
-            KeyCode::Char('n') | KeyCode::Char('N')
-                if self.active_popup == Some(Popup::DeleteConfirmation) =>
-            {
-                self.close_all_popups();
-            }
-            KeyCode::Enter if self.active_popup == Some(Popup::AddTaskFromUrl) => {
-                self.events.send(AppEvent::AddTaskFromUrl);
-                self.close_all_popups();
-            }
-            KeyCode::Enter if self.active_popup == Some(Popup::AddTaskFromFile) => {
-                self.events.send(AppEvent::AddTaskFromFile);
-            }
+            KeyCode::Char('d') => self.events.send(AppEvent::DeleteTask),
+            // Keys for sorting the columns
+            KeyCode::Char('1') => self.sort_by(SortColumn::Name),
+            KeyCode::Char('2') => self.sort_by(SortColumn::Size),
+            KeyCode::Char('3') => self.sort_by(SortColumn::Downloaded),
+            KeyCode::Char('4') => self.sort_by(SortColumn::Uploaded),
+            KeyCode::Char('5') => self.sort_by(SortColumn::Progress),
+            KeyCode::Char('6') => self.sort_by(SortColumn::UploadSpeed),
+            KeyCode::Char('7') => self.sort_by(SortColumn::DownloadSpeed),
+            KeyCode::Char('8') => self.sort_by(SortColumn::Ratio),
+            KeyCode::Char('9') => self.sort_by(SortColumn::Status),
             _ => {}
         }
         Ok(())
     }
 
-    /// Handles global keys
-    fn handle_global_keys(&mut self, key_event: KeyEvent) -> color_eyre::Result<()> {
-        match key_event.code {
-            KeyCode::Esc | KeyCode::Char('q') => {
-                self.events.send(AppEvent::Quit);
+    pub async fn tick(&mut self) -> anyhow::Result<()> {
+        if self.loading {
+            self.spinner_frame = (self.spinner_frame + 1) % SPINNER_FRAMES.len();
+        }
+        if let Some(interval) = self.refresh_interval {
+            self.tick_count += 1;
+            if self.tick_count >= interval {
+                self.tick_count = 0;
+                self.refresh_tasks().await?;
             }
-            KeyCode::Char('j') => self.events.send(AppEvent::SelectNextRow),
-            KeyCode::Char('k') => self.events.send(AppEvent::SelectPreviousRow),
-            KeyCode::Down => self.events.send(AppEvent::ScrollDownInfo),
-            KeyCode::Up => self.events.send(AppEvent::ScrollUpInfo),
-            KeyCode::Char('h') => self.events.send(AppEvent::SelectPreviousTab),
-            KeyCode::Char('l') => self.events.send(AppEvent::SelectNextTab),
-            KeyCode::Char('a') => self.events.send(AppEvent::ShowAddTaskFromUrl),
-            KeyCode::Char('A') => self.events.send(AppEvent::ShowAddTaskFromFile),
-            KeyCode::Char('i') => self.events.send(AppEvent::ServerInfo),
-            KeyCode::Char('p') => self.events.send(AppEvent::PauseResumeTask),
-            KeyCode::Char('r') => self.events.send(AppEvent::ManualRefresh),
-            KeyCode::Char('d') => self.events.send(AppEvent::ShowDeleteConfirmation),
-            KeyCode::Char('?') => self.events.send(AppEvent::Help),
-            _ => {}
         }
         Ok(())
     }
-    /// Handles the tick event of the terminal.
-    ///
-    /// The tick event is where you can update the state of your application with any logic that
-    /// needs to be updated at a fixed frame rate. E.g. polling a server, updating an animation.
-    pub fn tick(&self) {}
 
-    /// Set running to false to quit the application.
     pub fn quit(&mut self) {
         self.running = false;
     }
 
-    /// Select next row in task list
-    pub fn select_next_row(&mut self) {
-        self.info_panel_scroll_position = 0;
-        self.selected_row.select_next();
-    }
-
-    /// Select previous row in task list
-    pub fn select_previous_row(&mut self) {
-        self.info_panel_scroll_position = 0;
-        self.selected_row.select_previous();
-    }
-
-    /// Select next row in the filepicker
-    pub fn select_next_row_filepicker(&mut self) {
-        self.selected_row_filepicker.select_next();
-    }
-
-    /// Select previous row in the filepicker
-    pub fn select_previous_row_filepicker(&mut self) {
-        self.selected_row_filepicker.select_previous();
-    }
-
-    /// Store the index of the selected row in the task list
-    pub fn selected_table_row_index(&self) -> usize {
-        self.selected_row.selected().unwrap_or(0)
-    }
-
-    /// Help popup state
-    pub fn show_help_popup(&mut self) {
-        self.active_popup = Some(Popup::Help);
-    }
-
-    /// ServerInfo popup state
-    pub fn show_server_info_popup(&mut self) {
-        self.active_popup = Some(Popup::ServerInfo);
-    }
-
-    /// Add task popup state
-    pub fn show_add_task_popup(&mut self) {
-        self.active_popup = Some(Popup::AddTaskFromUrl);
-    }
-
-    /// Add task from file popup state
-    pub fn show_add_task_file_picker(&mut self) {
-        self.active_popup = Some(Popup::AddTaskFromFile);
-    }
-
-    /// Error popup state
-    pub fn show_error_popup(&mut self) {
-        self.active_popup = Some(Popup::Error);
-    }
-
-    /// Confirmation popup state
-    pub fn show_delete_confirmation_popup(&mut self) {
-        self.active_popup = Some(Popup::DeleteConfirmation);
-    }
-
-    /// Scroll down in popup windows
-    pub fn scroll_down(&mut self) {
-        self.popup_scroll_position = self.popup_scroll_position.saturating_add(1);
-    }
-
-    /// Scroll up in popup windows
-    pub fn scroll_up(&mut self) {
-        self.popup_scroll_position = self.popup_scroll_position.saturating_sub(1);
-    }
-
-    /// Scroll down in info window
-    pub fn scroll_down_info(&mut self) {
-        self.info_panel_scroll_position = self.info_panel_scroll_position.saturating_add(1);
-        self.info_panel_scrollbarstate = self
-            .info_panel_scrollbarstate
-            .position(self.info_panel_scroll_position);
-    }
-
-    /// Scroll up in info window
-    pub fn scroll_up_info(&mut self) {
-        self.info_panel_scroll_position = self.info_panel_scroll_position.saturating_sub(1);
-        self.info_panel_scrollbarstate = self
-            .info_panel_scrollbarstate
-            .position(self.info_panel_scroll_position);
-    }
-
-    /// Select next tab in the info panel
-    pub fn select_next_tab(&mut self) {
-        self.selected_tab = (self.selected_tab + 1) % self.tabs.len();
-    }
-
-    /// Select previous tab in the info panel
-    pub fn select_previous_tab(&mut self) {
-        if self.selected_tab == 0 {
-            self.selected_tab = self.tabs.len() - 1;
-        } else {
-            self.selected_tab -= 1;
-        }
-    }
-
-    // Loads tasks from DownloadStation
-    pub async fn load_tasks(&mut self, client: &SynologyClient) {
-        // Storing last active task id for restoring after the refresh
-        let prev_id = self
-            .selected_row
-            .selected()
-            // .and_then(|i| self.items.get(i).map(|t| t.id.clone()));
-            .and_then(|i| self.items.get(i).map(|t| t.id.clone()));
-
-        match client.list_download_tasks().await {
-            Ok(tasks) => self.items = tasks,
-            Err(e) => {
-                self.error_message = Some(format!("Failed to fetch tasks: {e}\n"));
-                self.items.clear();
+    pub async fn refresh_tasks(&mut self) -> anyhow::Result<()> {
+        if let Some(client) = &self.client {
+            self.loading = true;
+            self.refreshing_tasks = true;
+            let result = client.get_tasks().await;
+            self.loading = false;
+            self.refreshing_tasks = false;
+            match result {
+                Ok(result) => {
+                    self.tasks = result.task;
+                    if !self.tasks.is_empty() {
+                        self.selected_task.select(Some(0));
+                        self.update_info_counts();
+                    }
+                }
+                Err(e) => {
+                    self.show_popup(vec!["Failed to get tasks:".into(), e.to_string()], true);
+                }
             }
         }
-
-        if !self.items.is_empty() {
-            let new_selection = prev_id
-                // If we had an ID, try to find it in the refreshed list
-                .and_then(|id| self.items.iter().position(|t| t.id == id))
-                // Otherwise (or if not found), default to the top
-                .or(Some(0));
-            self.selected_row.select(new_selection);
-        } else {
-            // No tasks at all -> clear selection
-            self.selected_row.select(None);
-        }
-    }
-
-    pub async fn refresh_tasks(
-        &mut self,
-        client: &SynologyClient,
-        terminal: &mut DefaultTerminal,
-    ) -> color_eyre::Result<()> {
-        self.refreshing_tasks = true;
-        self.redraw(terminal)?;
-        self.load_tasks(client).await;
-        self.refreshing_tasks = false;
-        self.redraw(terminal)?;
         Ok(())
     }
 
-    pub fn extend_task_info(tasks: Vec<DownloadTask>) -> Vec<ExtendedDownloadTask> {
-        tasks.into_iter().map(ExtendedDownloadTask::from).collect()
+    // Task panel scroll and row selection
+    pub fn next_task_row(&mut self) {
+        move_next(&mut self.selected_task, self.tasks.len());
+        self.reset_info_scroll();
+        self.update_info_counts();
+    }
+    pub fn previous_task_row(&mut self) {
+        move_previous(&mut self.selected_task);
+        self.reset_info_scroll();
+        self.update_info_counts();
     }
 
-    // Load config for displaying in the info panel
-    pub fn load_config_file(&self) -> config::AppConfig {
-        let config = AppConfig::load();
-        // Want to panic if config file is not readable, since we already read or created it during
-        // startup
-        config.expect("❌ Config file missing or unaccessible, aborting.")
+    // Info Panel scroll and row selection
+    fn reset_info_scroll(&mut self) {
+        self.tracker_scroll = 0;
+        self.peer_scroll = 0;
+        self.file_scroll = 0;
     }
 
-    // Add task from url
-    pub async fn add_task_from_url(&mut self, client: &mut SynologyClient) {
-        // Get text content of clipboard
-        let clipboard_text = get_clipboard();
-        // Validate if it's a URL
-        match validate_url(&clipboard_text) {
-            Ok(()) => match client.create_task_from_url(&clipboard_text).await {
-                Ok(()) => self.load_tasks(client).await,
-                Err(e) => {
-                    self.error_message = Some(format!("Failed to add task: {e}"));
-                    self.show_error_popup();
+    pub fn scroll_info_down(&mut self) {
+        match self.selected_tab {
+            2 => {
+                let max = self.tracker_count.saturating_sub(self.tracker_inner_height);
+                self.tracker_scroll = (self.tracker_scroll + 1).min(max);
+            }
+            3 => {
+                let max = self.peer_count.saturating_sub(self.peer_inner_height);
+                self.peer_scroll = (self.peer_scroll + 1).min(max);
+            }
+            4 => {
+                let max = self.file_count.saturating_sub(self.file_inner_height);
+                self.file_scroll = (self.file_scroll + 1).min(max);
+            }
+            _ => {}
+        }
+    }
+
+    pub fn scroll_info_up(&mut self) {
+        match self.selected_tab {
+            2 => self.tracker_scroll = self.tracker_scroll.saturating_sub(1),
+            3 => self.peer_scroll = self.peer_scroll.saturating_sub(1),
+            4 => self.file_scroll = self.file_scroll.saturating_sub(1),
+            _ => {}
+        }
+    }
+
+    pub fn selected_task_index(&self) -> Option<usize> {
+        self.selected_task.selected()
+    }
+
+    pub fn show_popup(&mut self, lines: Vec<String>, error: bool) {
+        self.popup = Some(PopupState {
+            lines,
+            error,
+            scroll: 0,
+        });
+    }
+
+    pub fn close_popup(&mut self) {
+        self.popup = None;
+    }
+
+    pub fn update_info_counts(&mut self) {
+        if let Some(real_idx) = self.selected_task_in_sorted()
+            && let Some(task) = self.tasks.get(real_idx)
+        {
+            self.tracker_count = task
+                .additional
+                .as_ref()
+                .and_then(|a| a.tracker.as_ref())
+                .map(|t| t.len())
+                .unwrap_or(0);
+            self.peer_count = task
+                .additional
+                .as_ref()
+                .and_then(|a| a.peer.as_ref())
+                .map(|p| p.len())
+                .unwrap_or(0);
+            self.file_count = task
+                .additional
+                .as_ref()
+                .and_then(|a| a.file.as_ref())
+                .map(|f| f.len())
+                .unwrap_or(0);
+        }
+    }
+
+    // File picker methods
+    pub fn open_file_picker(&mut self) {
+        let theme = Theme::default()
+            .add_default_title()
+            .with_block(
+                Block::bordered()
+                    .border_type(BorderType::Rounded)
+                    .border_style(Style::default().fg(Color::Yellow))
+                    .title(" File Picker "),
+            )
+            .with_title_bottom(|_| {
+                " .torrent / .nzb / .txt · Enter to select · Esc to cancel ".into()
+            });
+        self.file_explorer = Some(FileExplorerBuilder::build_with_theme(theme).unwrap());
+    }
+    pub async fn submit_selected_file(&mut self) -> anyhow::Result<()> {
+        let allowed_extensions = ["torrent", "nzb", "txt"];
+
+        // Extract everything we need from the explorer before any API calls
+        let file_data = if let Some(explorer) = &self.file_explorer {
+            let path = explorer.current();
+            if path.is_file() {
+                let ext = path.path.extension().and_then(|e| e.to_str());
+                if ext
+                    .map(|e| allowed_extensions.contains(&e))
+                    .unwrap_or(false)
+                {
+                    let filename = path
+                        .path
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("upload.torrent")
+                        .to_string();
+                    match std::fs::read(&path.path) {
+                        Ok(bytes) => Some((bytes, filename)),
+                        Err(e) => {
+                            self.show_popup(
+                                vec!["Failed to read file:".into(), e.to_string()],
+                                true,
+                            );
+                            None
+                        }
+                    }
+                } else {
+                    self.show_popup(
+                        vec![
+                            "Unsupported file type.".into(),
+                            format!("Got: .{}", ext.unwrap_or("unknown")),
+                            "Only .torrent, .nzb and .txt are supported.".into(),
+                        ],
+                        true,
+                    );
+                    None
                 }
-            },
-
-            Err(e) => {
-                self.error_message = Some(e);
-                self.show_error_popup();
-            }
-        }
-    }
-
-    /// Return filelist
-    pub fn return_file_list(&self) -> &[FileAttributes] {
-        &self.dir_list
-    }
-
-    /// Add task from file
-    pub async fn add_task_from_file(&mut self, client: &mut SynologyClient, file_path: String) {
-        if let Ok(file_data) = get_file_content(file_path.clone()) {
-            if let Err(e) = client.create_task_from_file(file_path, &file_data).await {
-                self.error_message = Some(format!("Failed to add task: {e}"));
-                self.show_error_popup();
             } else {
-                self.load_tasks(client).await;
-                self.close_all_popups();
+                // selected a directory, do nothing silently
+                None
             }
         } else {
-            self.error_message = Some("Failed to read file.".to_string());
-            self.show_error_popup();
-        }
-    }
-
-    pub async fn pause_task(&mut self, client: &mut SynologyClient) {
-        let idx = self.selected_table_row_index();
-        let id = &self.items[idx].id.clone();
-
-        let is_paused = self.items[idx].status.label() == "paused";
-        let result = if is_paused {
-            client.resume_task(id).await
-        } else {
-            client.pause_task(id).await
+            None
         };
 
-        if let Err(e) = result {
-            self.error_message = Some(format!(
-                "{} task failed for: {id}\nError: {e}",
-                if is_paused { "Resume" } else { "Pause" }
-            ));
+        self.file_explorer = None;
+
+        if let Some((file_bytes, filename)) = file_data
+            && let Some(client) = &self.client
+        {
+            let _ = client
+                .create_task_from_file(&file_bytes, &filename, &self.destination)
+                .await;
+            if let Err(e) = self.refresh_tasks().await {
+                self.show_popup(
+                    vec!["Task added but refresh failed:".into(), e.to_string()],
+                    true,
+                );
+            }
+        }
+
+        Ok(())
+    }
+
+    // Add by URL methods
+    pub fn open_url_input(&mut self) {
+        self.url_input = Some(Input::default());
+    }
+
+    pub async fn submit_url(&mut self) -> anyhow::Result<()> {
+        if let Some(input) = &self.url_input {
+            let url = input.value().trim().to_string();
+            if url.is_empty() {
+                self.show_popup(vec!["Please enter a URL.".into()], true);
+            } else if !url.starts_with("http://")
+                && !url.starts_with("https://")
+                && !url.starts_with("magnet:")
+            {
+                self.show_popup(
+                    vec![
+                        "Invalid URL format.".into(),
+                        "Must start with http://, https://, or magnet:".into(),
+                    ],
+                    true,
+                );
+            } else if let Some(client) = &self.client {
+                self.loading = true;
+                let _ = client.create_task(&url, &self.destination).await;
+                self.events.send(AppEvent::Refresh);
+            }
+        }
+        self.url_input = None;
+        Ok(())
+    }
+
+    // Toggle task status (pause/resume)
+    pub async fn toggle_task(&mut self) -> anyhow::Result<()> {
+        // Extract task id and status before borrowing client
+        let task_info = if let Some(real_idx) = self.selected_task_in_sorted() {
+            self.tasks.get(real_idx).map(|task| {
+                let should_pause = matches!(
+                    task.status,
+                    TaskStatus::Downloading | TaskStatus::Waiting | TaskStatus::Seeding
+                );
+                let is_paused = matches!(task.status, TaskStatus::Paused | TaskStatus::Finished);
+                (task.id.clone(), should_pause, is_paused)
+            })
+        } else {
+            None
+        };
+
+        if let Some((task_id, should_pause, is_paused)) = task_info {
+            if let Some(client) = &self.client {
+                let result = if should_pause {
+                    client.pause(&task_id).await.map(|_| ())
+                } else if is_paused {
+                    client.resume(&task_id).await.map(|_| ())
+                } else {
+                    return Ok(());
+                };
+
+                if let Err(e) = result {
+                    self.show_popup(vec!["Failed to toggle task:".into(), e.to_string()], true);
+                    return Ok(());
+                }
+            }
+
+            if let Err(e) = self.refresh_tasks().await {
+                self.show_popup(vec!["Failed to refresh tasks:".into(), e.to_string()], true);
+            }
+        }
+
+        Ok(())
+    }
+
+    // Complete task
+    pub async fn complete_task(&mut self) -> anyhow::Result<()> {
+        if let Some(real_idx) = self.selected_task_in_sorted()
+            && let Some(task) = self.tasks.get(real_idx)
+            && let Some(client) = &self.client
+        {
+            if let Err(e) = client.complete(&task.id).await {
+                self.show_popup(vec!["Failed to complete task:".into(), e.to_string()], true);
+            }
+
+            if let Err(e) = self.refresh_tasks().await {
+                self.show_popup(vec!["Failed to refresh tasks:".into(), e.to_string()], true);
+            }
+        }
+        Ok(())
+    }
+
+    /// Clear completed tasks
+    pub async fn clear_completed(&mut self) -> anyhow::Result<()> {
+        if let Some(client) = &self.client {
+            if let Err(e) = client.clear_completed().await {
+                self.show_popup(
+                    vec!["Failed to clear completed task(s):".into(), e.to_string()],
+                    true,
+                );
+            }
+            if let Err(e) = self.refresh_tasks().await {
+                self.show_popup(vec!["Failed to refresh tasks:".into(), e.to_string()], true);
+            }
+        }
+        Ok(())
+    }
+
+    /// Delete selected task
+    pub fn request_delete_task(&mut self) {
+        if let Some(real_idx) = self.selected_task_in_sorted()
+            && let Some(task) = self.tasks.get(real_idx)
+        {
+            self.pending_action = Some(PendingAction::DeleteTask(task.id.clone()));
+            self.show_popup(
+                vec![
+                    format!("Delete task: {}?", task.title),
+                    String::new(),
+                    "  y / Enter — confirm".into(),
+                    "  n / Esc   — cancel".into(),
+                ],
+                false,
+            );
         }
     }
 
-    pub async fn delete_task(&mut self, client: &mut SynologyClient) {
-        let idx = self.selected_table_row_index();
-        let id = &self.items[idx].id.clone();
-
-        let result = client.delete_task(id).await;
-
-        if let Err(e) = result {
-            self.error_message = Some(format!("Delete task failed for: {id}\nError: {e}",));
+    /// Confirm action popup (delete uses this only at the moment)
+    pub async fn confirm_action(&mut self) -> anyhow::Result<()> {
+        if let Some(action) = self.pending_action.take() {
+            match action {
+                PendingAction::DeleteTask(task_id) => {
+                    self.close_popup();
+                    if let Some(client) = &self.client {
+                        match client.delete_task(&task_id, false).await {
+                            Ok(_) => {
+                                if let Err(e) = self.refresh_tasks().await {
+                                    self.show_popup(
+                                        vec![
+                                            "Task deleted but refresh failed:".into(),
+                                            e.to_string(),
+                                        ],
+                                        true,
+                                    );
+                                }
+                            }
+                            Err(e) => {
+                                self.show_popup(
+                                    vec!["Failed to delete task:".into(), e.to_string()],
+                                    true,
+                                );
+                            }
+                        }
+                    }
+                }
+            }
         }
+        Ok(())
     }
 
-    // Close and reset all popup from one place
-    pub fn close_all_popups(&mut self) {
-        self.active_popup = None;
-        self.error_message = None;
-        self.popup_scroll_position = 0;
-        self.selected_row_filepicker = TableState::default();
+    /// Cancel action
+    pub fn cancel_action(&mut self) {
+        self.pending_action = None;
+        self.close_popup();
+    }
+
+    pub fn sort_by(&mut self, column: SortColumn) {
+        if self.sort_column == column {
+            // Same column — toggle order
+            self.sort_order = match self.sort_order {
+                SortOrder::Ascending => SortOrder::Descending,
+                SortOrder::Descending => SortOrder::Ascending,
+            };
+        } else {
+            self.sort_column = column;
+            self.sort_order = SortOrder::Ascending;
+        }
+        self.selected_task.select(Some(0));
+        self.reset_info_scroll();
+    }
+
+    pub fn sorted_tasks(&self) -> Vec<&Task> {
+        let mut tasks: Vec<&Task> = self.tasks.iter().collect();
+
+        tasks.sort_by(|a, b| {
+            let ord = match self.sort_column {
+                SortColumn::Name => a.title.cmp(&b.title),
+                SortColumn::Size => a.size.cmp(&b.size),
+                SortColumn::Progress => a
+                    .calculate_progress()
+                    .partial_cmp(&b.calculate_progress())
+                    .unwrap_or(std::cmp::Ordering::Equal),
+                SortColumn::Ratio => a
+                    .calculate_ratio()
+                    .partial_cmp(&b.calculate_ratio())
+                    .unwrap_or(std::cmp::Ordering::Equal),
+                SortColumn::Status => format!("{:?}", a.status).cmp(&format!("{:?}", b.status)),
+                SortColumn::Downloaded => {
+                    let a_dl = a
+                        .additional
+                        .as_ref()
+                        .and_then(|x| x.transfer.as_ref())
+                        .map(|t| t.size_downloaded)
+                        .unwrap_or(0);
+                    let b_dl = b
+                        .additional
+                        .as_ref()
+                        .and_then(|x| x.transfer.as_ref())
+                        .map(|t| t.size_downloaded)
+                        .unwrap_or(0);
+                    a_dl.cmp(&b_dl)
+                }
+                SortColumn::Uploaded => {
+                    let a_ul = a
+                        .additional
+                        .as_ref()
+                        .and_then(|x| x.transfer.as_ref())
+                        .map(|t| t.size_uploaded)
+                        .unwrap_or(0);
+                    let b_ul = b
+                        .additional
+                        .as_ref()
+                        .and_then(|x| x.transfer.as_ref())
+                        .map(|t| t.size_uploaded)
+                        .unwrap_or(0);
+                    a_ul.cmp(&b_ul)
+                }
+                SortColumn::UploadSpeed => {
+                    let a_us = a
+                        .additional
+                        .as_ref()
+                        .and_then(|x| x.transfer.as_ref())
+                        .map(|t| t.speed_upload)
+                        .unwrap_or(0);
+                    let b_us = b
+                        .additional
+                        .as_ref()
+                        .and_then(|x| x.transfer.as_ref())
+                        .map(|t| t.speed_upload)
+                        .unwrap_or(0);
+                    a_us.cmp(&b_us)
+                }
+                SortColumn::DownloadSpeed => {
+                    let a_ds = a
+                        .additional
+                        .as_ref()
+                        .and_then(|x| x.transfer.as_ref())
+                        .map(|t| t.speed_download)
+                        .unwrap_or(0);
+                    let b_ds = b
+                        .additional
+                        .as_ref()
+                        .and_then(|x| x.transfer.as_ref())
+                        .map(|t| t.speed_download)
+                        .unwrap_or(0);
+                    a_ds.cmp(&b_ds)
+                }
+            };
+
+            match self.sort_order {
+                SortOrder::Ascending => ord,
+                SortOrder::Descending => ord.reverse(),
+            }
+        });
+
+        tasks
+    }
+
+    pub fn selected_task_in_sorted(&self) -> Option<usize> {
+        // Returns the index into self.tasks of the currently selected sorted row
+        let idx = self.selected_task.selected()?;
+        let sorted = self.sorted_tasks();
+        sorted
+            .get(idx)
+            .and_then(|task| self.tasks.iter().position(|t| t.id == task.id))
     }
 }

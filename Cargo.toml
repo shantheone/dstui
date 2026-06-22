@@ -1,29 +1,28 @@
 [package]
 name = "dstui"
-version = "0.5.0"
-description = "dstui"
+version = "0.6.0"
+description = "dstui - a Synology Download Station CLI client"
 authors = ["shan <shandoor@gmail.com>"]
 license = "MIT"
 edition = "2024"
 
 [dependencies]
-crossterm = { version = "0.28.1", features = ["event-stream"] }
+crossterm = { version = "0.29.0", features = ["event-stream"] }
 futures = "0.3.31"
-ratatui = "0.29.0"
+ratatui = "0.30.0"
 tokio = { version = "1.40.0", features = ["full"] }
-color-eyre = "0.6.3"
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-dialoguer = "0.12.0"
-humantime = "2.2.0"
-chrono = { version = "0.4.40", features = ["serde"] }
+anyhow = "1.0.101"
+syno-download-station = "0.6.0" 
+ratatui-explorer = "0.3.0"
+tui-input = "0.15.3"
 dirs = "6.0.0"
-toml = "0.9.5"
-clipboard-rs = "0.3.0"
-reqwest = { version = "0.11.27", features = [
-  "json",
-  "cookies",
-  "cookie_store",
-  "multipart",
-  "socks"
-] }
+toml = "1.1.2+spec-1.1.0"
+serde = { version = "1", features = ["derive"] }
+rpassword = "7.5.4"
+
+# Read the optimization guideline for more details: https://ratatui.rs/recipes/apps/release-your-app/#optimizations
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+strip = true

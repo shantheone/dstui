@@ -1,83 +1,193 @@
-use crate::app::{App, Popup};
-use crate::config::AppConfig;
-use crate::util::{
-    FileAttributes, format_bytes, format_seconds, format_timestamp, get_clipboard,
-    render_progress_bar,
-};
-
-use ratatui::widgets::TableState;
+use crate::app::{ActivePanel, App, SPINNER_FRAMES, SortColumn, SortOrder};
 use ratatui::{
-    Terminal,
     buffer::Buffer,
     layout::{Alignment, Constraint, Direction, Layout, Margin, Rect},
     style::{Color, Style, Stylize},
-    text::{Line, Text},
+    text::{Line, Span},
     widgets::{
         Block, BorderType, Cell, Clear, Paragraph, Row, Scrollbar, ScrollbarOrientation,
-        ScrollbarState, StatefulWidget, Table, Tabs, Widget,
+        ScrollbarState, StatefulWidget, Table, TableState, Tabs, Widget, WidgetRef, Wrap,
     },
 };
+use syno_download_station::entities::{Task, TaskStatus};
 
 impl Widget for &mut App {
-    /// Renders the user interface widgets.
-    ///
-    // This is where you add new widgets.
-    // See the following resources:
-    // - https://docs.rs/ratatui/latest/ratatui/widgets/index.html
-    // - https://github.com/ratatui/ratatui/tree/master/examples
     fn render(self, area: Rect, buf: &mut Buffer) {
-        // Set up the two-part layout
         let chunks =
             Layout::vertical([Constraint::Percentage(40), Constraint::Percentage(60)]).split(area);
 
-        // When refreshing tasks
-        let title_text = if self.refreshing_tasks {
-            " DownloadStation TUI Client - [Refreshing...] "
-                .bold()
-                .blue()
-        // ...and when not
-        } else {
-            " DownloadStation TUI Client ".bold().blue()
+        // Compute total speeds
+        let (total_down, total_up) = self.tasks.iter().fold((0u64, 0u64), |acc, task| {
+            task.additional
+                .as_ref()
+                .and_then(|a| a.transfer.as_ref())
+                .map(|t| (acc.0 + t.speed_download, acc.1 + t.speed_upload))
+                .unwrap_or(acc)
+        });
+
+        // Build headers with sort indicator
+        let sort_indicator = |col: &SortColumn| -> &str {
+            if &self.sort_column == col {
+                match self.sort_order {
+                    SortOrder::Ascending => " ▲",
+                    SortOrder::Descending => " ▼",
+                }
+            } else {
+                ""
+            }
         };
 
-        // Add a table to the top chunk
+        let spinner = SPINNER_FRAMES[self.spinner_frame];
+        let auto_refresh_title;
+        let spinner_title;
+        let stats_title;
+        let title_text = if self.loading {
+            spinner_title = format!(" {} DownloadStation TUI Client ", spinner);
+            spinner_title.as_str().bold().light_cyan()
+        } else if total_down > 0 || total_up > 0 {
+            stats_title = format!(
+                " DownloadStation TUI Client  ↓ {}  ↑ {} ",
+                format_speed(total_down),
+                format_speed(total_up),
+            );
+            stats_title.as_str().bold().light_cyan()
+        } else {
+            match self.refresh_interval {
+                Some(ticks) => {
+                    auto_refresh_title = format!(
+                        " DownloadStation TUI Client - [Auto-refresh: {}s] ",
+                        ticks / 30
+                    );
+                    auto_refresh_title.as_str().bold().light_cyan()
+                }
+                None => " DownloadStation TUI Client - [Auto-refresh: off] "
+                    .bold()
+                    .light_cyan(),
+            }
+        };
         let table_block = Block::bordered()
             .title(title_text)
             .title_alignment(Alignment::Center)
-            .border_type(BorderType::Rounded);
+            .border_type(BorderType::Rounded)
+            .border_style(match self.active_panel {
+                ActivePanel::Tasks => Style::default().fg(Color::Yellow),
+                _ => Style::default(),
+            });
 
-        // Row selection
-        let table_row_index = self.selected_table_row_index(); // Need the selected row's index later
-        let table_state = &mut self.selected_row;
+        let task_row_index = self.selected_task_index();
 
-        // Create the table with content and styling
-        let header = Row::new(self.headers.clone())
-            .style(Style::default().fg(Color::White).bg(Color::DarkGray).bold());
+        let header = Row::new(vec![
+            Cell::from(format!("Name{}", sort_indicator(&SortColumn::Name)))
+                .style(Style::default().fg(Color::White).bg(Color::DarkGray).bold()),
+            Cell::from(format!("Size{}", sort_indicator(&SortColumn::Size)))
+                .style(Style::default().fg(Color::White).bg(Color::DarkGray).bold()),
+            Cell::from(format!(
+                "Downloaded{}",
+                sort_indicator(&SortColumn::Downloaded)
+            ))
+            .style(Style::default().fg(Color::White).bg(Color::DarkGray).bold()),
+            Cell::from(format!("Uploaded{}", sort_indicator(&SortColumn::Uploaded)))
+                .style(Style::default().fg(Color::White).bg(Color::DarkGray).bold()),
+            Cell::from(format!("Progress{}", sort_indicator(&SortColumn::Progress)))
+                .style(Style::default().fg(Color::White).bg(Color::DarkGray).bold()),
+            Cell::from(format!(
+                "Up Speed{}",
+                sort_indicator(&SortColumn::UploadSpeed)
+            ))
+            .style(Style::default().fg(Color::White).bg(Color::DarkGray).bold()),
+            Cell::from(format!(
+                "Down Speed{}",
+                sort_indicator(&SortColumn::DownloadSpeed)
+            ))
+            .style(Style::default().fg(Color::White).bg(Color::DarkGray).bold()),
+            Cell::from(format!("Ratio{}", sort_indicator(&SortColumn::Ratio)))
+                .style(Style::default().fg(Color::White).bg(Color::DarkGray).bold()),
+            Cell::from(format!("Status{}", sort_indicator(&SortColumn::Status)))
+                .style(Style::default().fg(Color::White).bg(Color::DarkGray).bold()),
+        ]);
 
-        let download_tasks = App::extend_task_info(self.items.clone());
-        let rows = download_tasks.iter().map(|item| {
-            let cells = item.to_row_cells();
-            Row::new(cells)
-        });
+        let rows: Vec<Row> = self
+            .sorted_tasks()
+            .iter()
+            .map(|task| {
+                let progress = task.calculate_progress();
+
+                let status_style = match task.status {
+                    TaskStatus::Downloading => Style::default().fg(Color::Green),
+                    TaskStatus::Seeding => Style::default().fg(Color::Cyan),
+                    TaskStatus::Waiting => Style::default().fg(Color::Yellow),
+                    TaskStatus::Paused => Style::default().fg(Color::DarkGray),
+                    TaskStatus::Finishing => Style::default().fg(Color::LightGreen),
+                    TaskStatus::Finished => Style::default().fg(Color::DarkGray),
+                    TaskStatus::HashChecking => Style::default().fg(Color::Yellow),
+                    TaskStatus::Error => Style::default().fg(Color::Red),
+                    _ => Style::default().fg(Color::White),
+                };
+
+                let row_style = match task.status {
+                    TaskStatus::Paused | TaskStatus::Finished => {
+                        Style::default().fg(Color::DarkGray)
+                    }
+                    _ => Style::default(),
+                };
+
+                Row::new(vec![
+                    Cell::from(truncate(&task.title, 40)),
+                    Cell::from(task.calculate_size()),
+                    Cell::from(
+                        task.additional
+                            .as_ref()
+                            .and_then(|a| a.transfer.as_ref())
+                            .map(|t| format!("{:.1} MB", t.size_downloaded as f64 / 1_048_576.0))
+                            .unwrap_or_default(),
+                    ),
+                    Cell::from(
+                        task.additional
+                            .as_ref()
+                            .and_then(|a| a.transfer.as_ref())
+                            .map(|t| format!("{:.1} MB", t.size_uploaded as f64 / 1_048_576.0))
+                            .unwrap_or_default(),
+                    ),
+                    Cell::from(Line::from(render_progress_bar(progress, 8))),
+                    Cell::from(
+                        task.additional
+                            .as_ref()
+                            .and_then(|a| a.transfer.as_ref())
+                            .map(|t| format_speed(t.speed_upload))
+                            .unwrap_or_default(),
+                    ),
+                    Cell::from(
+                        task.additional
+                            .as_ref()
+                            .and_then(|a| a.transfer.as_ref())
+                            .map(|t| format_speed(t.speed_download))
+                            .unwrap_or_default(),
+                    ),
+                    Cell::from(format!("{:.2}", task.calculate_ratio())),
+                    Cell::from(format!("{:?}", task.status)).style(status_style),
+                ])
+                .style(row_style)
+            })
+            .collect();
+        let row_count = rows.len();
 
         let widths = [
-            Constraint::Percentage(25), // Name
-            Constraint::Percentage(10), // Size
-            Constraint::Percentage(10), // Downloaded
-            Constraint::Percentage(10), // Uploaded
-            Constraint::Percentage(10), // Progress
+            Constraint::Percentage(22), // Name
+            Constraint::Percentage(8),  // Size
+            Constraint::Percentage(8),  // Downloaded
+            Constraint::Percentage(8),  // Uploaded
+            Constraint::Percentage(14), // Progress (wider for bar)
             Constraint::Percentage(10), // Upload Speed
             Constraint::Percentage(10), // Download Speed
             Constraint::Percentage(5),  // Ratio
             Constraint::Percentage(10), // Status
         ];
 
-        // Add a scrollbar
         let table_scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
             .begin_symbol(Some("↑"))
             .end_symbol(Some("↓"));
-        let mut table_scrollbar_state = ScrollbarState::new(rows.len())
-            .position(table_row_index)
+        let mut table_scrollbar_state = ScrollbarState::new(row_count)
+            .position(task_row_index.unwrap_or(0))
             .viewport_content_length(1);
 
         let table = Table::new(rows, widths)
@@ -86,9 +196,7 @@ impl Widget for &mut App {
             .row_highlight_style(Style::new().reversed())
             .column_spacing(1);
 
-        // Render stateful widget of the table
-        StatefulWidget::render(table, chunks[0], buf, table_state);
-        // Render stateful widget of the table scrollbar
+        StatefulWidget::render(table, chunks[0], buf, &mut self.selected_task);
         StatefulWidget::render(
             table_scrollbar,
             chunks[0].inner(Margin {
@@ -99,679 +207,504 @@ impl Widget for &mut App {
             &mut table_scrollbar_state,
         );
 
-        // Add an info block to the bottom chunk
+        // Info panel
         let info_block = Block::bordered()
-            .title(" Info ".bold())
+            .title(Line::from(vec![
+                Span::styled(" Info ", Style::default().bold()),
+                Span::styled(
+                    format!("— {} ", self.tabs[self.selected_tab]),
+                    Style::default().fg(Color::Yellow).bold(),
+                ),
+            ]))
             .title_alignment(Alignment::Center)
-            .title_bottom(" Scroll with ↑ / ↓")
-            .border_type(BorderType::Rounded);
+            .title_bottom(" Tab to switch panels ")
+            .border_type(BorderType::Rounded)
+            .border_style(match self.active_panel {
+                ActivePanel::Info => Style::default().fg(Color::Yellow),
+                _ => Style::default(),
+            });
         info_block.render(chunks[1], buf);
 
-        // Carve out inner area (leave border margin)
         let inner_area = Layout::default()
             .direction(Direction::Vertical)
             .margin(1)
             .constraints([Constraint::Length(1), Constraint::Min(0)])
             .split(chunks[1]);
 
-        // Tabs go in inner[0]
-        let tab_titles = self.tabs.iter().map(|t| Line::from(*t)).collect::<Vec<_>>();
+        let tab_titles = self
+            .tabs
+            .iter()
+            .enumerate()
+            .map(|(i, t)| {
+                if i == self.selected_tab {
+                    Line::from(Span::styled(
+                        format!(" {} ", t),
+                        Style::default().fg(Color::Black).bg(Color::Yellow).bold(),
+                    ))
+                } else {
+                    Line::from(Span::styled(
+                        format!(" {} ", t),
+                        Style::default().fg(Color::White),
+                    ))
+                }
+            })
+            .collect::<Vec<_>>();
+
         let tabs = Tabs::new(tab_titles)
             .select(self.selected_tab)
-            .highlight_style(Style::default().fg(Color::Yellow))
             .divider("│")
             .bg(Color::DarkGray);
         tabs.render(inner_area[0], buf);
 
-        // Counter for the lines in the text for the info panel scrollbar
-        let mut info_text_line_count = 0;
-
-        // Create info panel tab contents
-        let tab_content = match self.selected_tab {
-            // General tab
-            0 => {
-                let general_tab = Text::from(vec![
-                    Line::from(""),
-                    Line::from(format!(
-                        "ID                  : {}",
-                        download_tasks[self.selected_table_row_index()].task_id
-                    )),
-                    Line::from(format!(
-                        "Title               : {}",
-                        download_tasks[self.selected_table_row_index()].task_title
-                    )),
-                    Line::from(format!(
-                        "Destination         : {}",
-                        download_tasks[self.selected_table_row_index()].task_destination
-                    )),
-                    Line::from(format!(
-                        "Size                : {}",
-                        format_bytes(download_tasks[self.selected_table_row_index()].task_size)
-                    )),
-                    Line::from(format!(
-                        "User name           : {}",
-                        download_tasks[self.selected_table_row_index()].task_username
-                    )),
-                    Line::from(format!(
-                        "URL / File Name     : {}",
-                        download_tasks[self.selected_table_row_index()].task_uri
-                    )),
-                    Line::from(format!(
-                        "Created time        : {}",
-                        format_timestamp(
-                            download_tasks[self.selected_table_row_index()].task_create_time
-                        )
-                    )),
-                    Line::from(format!(
-                        "Completed time      : {}",
-                        format_timestamp(
-                            download_tasks[self.selected_table_row_index()].task_completed_time
-                        )
-                    )),
-                    Line::from(format!(
-                        "Estimated wait time : {}",
-                        format_seconds(
-                            download_tasks[self.selected_table_row_index()].waiting_seconds
-                        )
-                    )),
-                ]);
-                info_text_line_count = general_tab.height();
-                general_tab
-            }
-            // Transfer tab
-            1 => {
-                self.info_panel_scroll_position = 0;
-                let progress_percentage = (download_tasks[self.selected_table_row_index()]
-                    .task_size_downloaded as f64
-                    / download_tasks[self.selected_table_row_index()].task_size as f64)
-                    * 100.0;
-                let transfer_tab = Text::from(vec![
-                    Line::from(""),
-                    Line::from(format!(
-                        "Status              : {}",
-                        download_tasks[self.selected_table_row_index()]
-                            .task_status
-                            .label()
-                    )),
-                    Line::from(format!(
-                        "Tranferred (UL/DL)  : {} / {} Ratio: {:.2}",
-                        format_bytes(
-                            download_tasks[self.selected_table_row_index()].task_size_uploaded
-                        ),
-                        format_bytes(
-                            download_tasks[self.selected_table_row_index()].task_size_downloaded
-                        ),
-                        download_tasks[self.selected_table_row_index()].task_ratio
-                    )),
-                    Line::from(format!(
-                        "Progress            : {}",
-                        render_progress_bar(progress_percentage as u64, 20)
-                    )),
-                    Line::from(format!(
-                        "Speed DL / UL       : {} / {}",
-                        format_bytes(
-                            download_tasks[self.selected_table_row_index()].task_speed_download
-                        ),
-                        format_bytes(
-                            download_tasks[self.selected_table_row_index()].task_speed_upload
-                        ),
-                    )),
-                    Line::from(format!(
-                        "Peers               : {}",
-                        download_tasks[self.selected_table_row_index()].total_peers
-                    )),
-                    Line::from(format!(
-                        "Connected peers     : {}",
-                        download_tasks[self.selected_table_row_index()].connected_peers
-                    )),
-                    Line::from(format!(
-                        "Total pieces        : {}",
-                        download_tasks[self.selected_table_row_index()].total_pieces
-                    )),
-                    Line::from(format!(
-                        "Downloaded pieces   : {}",
-                        download_tasks[self.selected_table_row_index()].task_downloaded_pieces
-                    )),
-                    Line::from(format!(
-                        "Seed elapsed        : {}",
-                        format_seconds(
-                            download_tasks[self.selected_table_row_index()].task_seedelapsed
-                        )
-                    )),
-                    Line::from(format!(
-                        "Seeders / Leechers  : {} / {}",
-                        download_tasks[self.selected_table_row_index()].connected_seeders,
-                        download_tasks[self.selected_table_row_index()].connected_leechers
-                    )),
-                    Line::from(format!(
-                        "Start time          : {}",
-                        format_timestamp(
-                            download_tasks[self.selected_table_row_index()].task_started_time
-                        )
-                    )),
-                ]);
-                info_text_line_count = transfer_tab.height();
-                transfer_tab
-            }
-
-            // Trackers
-            2 => {
-                let mut trackers_tab = Text::from(vec![Line::from("")]);
-
-                for trackers in download_tasks[self.selected_table_row_index()]
-                    .trackers
-                    .clone()
-                {
-                    let line = Line::from(format!(
-                        "URL: {} | Status: {} | Next Update: {} | Seeds: {} | Peers: {}",
-                        trackers.url,
-                        trackers.status,
-                        format_seconds(trackers.update_timer),
-                        trackers.seeds,
-                        trackers.peers,
-                    ));
-                    trackers_tab.push_line(line);
+        // Render tab content for the selected task
+        if let Some(real_idx) = self.selected_task_in_sorted()
+            && let Some(task) = self.tasks.get(real_idx)
+        {
+            match self.selected_tab {
+                0 => render_general_tab(task, inner_area[1], buf),
+                1 => render_transfer_tab(task, inner_area[1], buf),
+                2 => {
+                    self.tracker_inner_height = inner_area[1].height as usize;
+                    render_tracker_tab(
+                        task,
+                        inner_area[1],
+                        buf,
+                        self.tracker_scroll,
+                        self.tracker_count,
+                    );
                 }
-                info_text_line_count = trackers_tab.height();
-                trackers_tab
-            }
-
-            // Peers
-            3 => {
-                let mut peers_tab = Text::from(vec![Line::from("")]);
-
-                for peers in download_tasks[self.selected_table_row_index()]
-                    .peers
-                    .clone()
-                {
-                    let line = Line::from(format!(
-                        "IP: {} | Agent: {} | Progress: {} | Download Speed: {} | Upload Speed: {}",
-                        peers.address,
-                        peers.agent,
-                        render_progress_bar((peers.progress * 100.0) as u64, 10),
-                        format_bytes(peers.speed_download),
-                        format_bytes(peers.speed_upload),
-                    ));
-                    peers_tab.push_line(line);
+                3 => {
+                    self.peer_inner_height = inner_area[1].height as usize;
+                    render_peers_tab(task, inner_area[1], buf, self.peer_scroll, self.peer_count);
                 }
-                info_text_line_count = peers_tab.height();
-                peers_tab
-            }
-
-            // Files
-            4 => {
-                // File
-                let mut files_tab = Text::from(vec![Line::from("")]);
-
-                for files in download_tasks[self.selected_table_row_index()]
-                    .files
-                    .clone()
-                {
-                    let line = Line::from(format!(
-                        "{} | {} | Downloaded: {} | Priority: {}",
-                        files.filename,
-                        format_bytes(files.size),
-                        format_bytes(files.size_downloaded),
-                        files.priority
-                    ));
-                    files_tab.push_line(line);
+                4 => {
+                    self.file_inner_height = inner_area[1].height as usize;
+                    render_files_tab(task, inner_area[1], buf, self.file_scroll, self.file_count);
                 }
-                info_text_line_count = files_tab.height();
-                files_tab
+                _ => {}
             }
-            _ => Text::from(vec![Line::from("")]),
-        };
-
-        // Add a scrollbar to the info panel
-        // TODO: Make text wrapped in the info panel and calculate for the extra lines somehow
-        let info_scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
-            .begin_symbol(Some("↑"))
-            .end_symbol(Some("↓"));
-
-        // Visible lines and Max scroll value for the scrollbar
-        let visible_lines = inner_area[1].height.saturating_sub(1);
-        let max_scroll = info_text_line_count.saturating_sub(visible_lines as usize);
-        let scroll_range = info_text_line_count
-            .saturating_sub(visible_lines as usize)
-            .max(1);
-
-        let scroll_position = &mut self.info_panel_scroll_position;
-        // Clamp the scroll position and update it at the same time so it will not go infinately
-        if *scroll_position > max_scroll {
-            *scroll_position = max_scroll;
         }
 
-        let mut info_scrollbar_state = self
-            .info_panel_scrollbarstate
-            .position(*scroll_position)
-            .content_length(scroll_range)
-            .viewport_content_length(visible_lines as usize);
-
-        // Render stateful widget of the table scrollbar
-        StatefulWidget::render(
-            info_scrollbar,
-            chunks[1].inner(Margin {
-                vertical: 1,
-                horizontal: 0,
-            }),
-            buf,
-            &mut info_scrollbar_state,
-        );
-
-        let info_paragraph = Paragraph::new(tab_content)
-            .fg(Color::White)
-            .scroll((*scroll_position as u16, 0));
-
-        info_paragraph.render(inner_area[1], buf);
-
-        // Show help popup
-        if self.active_popup == Some(Popup::Help) {
-            App::render_help_popup(self, area, buf);
+        // File picker
+        if let Some(explorer) = &self.file_explorer {
+            let picker_area = area.centered(Constraint::Percentage(70), Constraint::Percentage(80));
+            Clear.render(picker_area, buf);
+            explorer.widget().render_ref(picker_area, buf);
         }
 
-        // Show server info popup
-        if self.active_popup == Some(Popup::ServerInfo) {
-            App::render_info_popup(self, area, buf);
+        // URL input field
+        if let Some(input) = &self.url_input {
+            let input_area = Rect {
+                x: area.x,
+                y: area.y + area.height - 3,
+                width: area.width,
+                height: 3,
+            };
+            Clear.render(input_area, buf);
+
+            let input_block = Block::bordered()
+                .title(" Add URL (Enter to confirm · Esc to cancel) ")
+                .border_type(BorderType::Rounded)
+                .border_style(Style::default().fg(Color::Yellow));
+
+            let inner = input_block.inner(input_area);
+            input_block.render(input_area, buf);
+
+            Paragraph::new(input.value()).render(inner, buf);
+
+            // Store cursor position: inner area start + cursor offset within input
+            self.url_input_cursor_pos = Some((inner.x + input.visual_cursor() as u16, inner.y));
+        } else {
+            self.url_input_cursor_pos = None;
         }
 
-        // Show error popup
-        if self.active_popup == Some(Popup::Error) {
-            App::render_error_popup(self, area, buf);
-        }
+        // Popup
+        if let Some(popup) = &self.popup {
+            let popup_area = area.centered(Constraint::Percentage(60), Constraint::Percentage(60));
+            Clear.render(popup_area, buf);
 
-        // Show confirmation popup
-        if self.active_popup == Some(Popup::DeleteConfirmation) {
-            App::render_delete_confirmation_popup(self, area, buf);
-        }
+            let border_style = if popup.error {
+                Style::default().fg(Color::Red)
+            } else {
+                Style::default().fg(Color::Yellow)
+            };
 
-        // Add task popup
-        if self.active_popup == Some(Popup::AddTaskFromUrl) {
-            App::render_add_task_popup(self, area, buf);
-        }
+            let title = if popup.error { " Error " } else { " Help " };
 
-        // Show file picker
-        if self.active_popup == Some(Popup::AddTaskFromFile) {
-            App::render_add_task_from_file_popup(self, area, buf);
-        }
-    }
-}
+            let lines: Vec<Line> = popup
+                .lines
+                .iter()
+                .map(|l| {
+                    Line::from(Span::styled(
+                        l.clone(),
+                        if popup.error {
+                            Style::default().fg(Color::LightRed)
+                        } else {
+                            Style::default().fg(Color::LightYellow)
+                        },
+                    ))
+                })
+                .collect();
 
-/// Add UI related associated functions
-impl App {
-    /// Redraws the entire user interface.
-    pub fn redraw<B: ratatui::backend::Backend>(
-        &mut self,
-        terminal: &mut Terminal<B>,
-    ) -> color_eyre::Result<()> {
-        terminal.draw(|frame| {
-            // Delegate to render method on `App`
-            frame.render_widget(self, frame.area());
-        })?;
-        Ok(())
-    }
+            let block = Block::bordered()
+                .title(title)
+                .title_bottom(" j / k to scroll · Esc to close ")
+                .border_type(BorderType::Rounded)
+                .border_style(border_style);
 
-    /// Show server info window
-    pub fn render_info_popup(&mut self, area: Rect, buf: &mut Buffer) {
-        let bottom_title = " Scroll down/up if needed with <j> and <k>, close with <q> ";
-        let server_config = self.load_config_file();
-        let server_config_path = AppConfig::config_path()
-            .into_os_string()
-            .into_string()
-            .unwrap();
-        if let Some(cfg) = &self.dsconfig {
-            let default_dest = cfg.default_destination.as_deref().unwrap_or("<none>");
-            let emule_dest = cfg.emule_default_destination.as_deref().unwrap_or("<none>");
+            // Split inner area to leave room for scrollbar
+            let inner = block.inner(popup_area);
+            let chunks =
+                Layout::horizontal([Constraint::Min(0), Constraint::Length(1)]).split(inner);
 
-            let server_info_lines = vec![
-                Line::from(format!(" Config file path    : {server_config_path}")),
-                Line::from(format!(
-                    " Server address      : {}",
-                    server_config.server_url
-                )),
-                Line::from(format!(
-                    " Server port         : {}",
-                    server_config.server_port
-                )),
-                Line::from(format!(" User name           : {}", server_config.username)),
-                Line::from(format!(
-                    " Refresh interval    : {} (in seconds)",
-                    server_config.refresh_interval
-                )),
-                Line::from(""),
-                Line::from(format!(" BT Max download     : {} KB/s", cfg.bt_max_upload)),
-                Line::from(format!(" BT Max Upload       : {} KB/s", cfg.bt_max_upload)),
-                Line::from(format!(
-                    " HTTP Max Download   : {} KB/s",
-                    cfg.http_max_download
-                )),
-                Line::from(format!(
-                    " FTP Max Download    : {} KB/s",
-                    cfg.ftp_max_download
-                )),
-                Line::from(format!(
-                    " NZB Max Download    : {} KB/s",
-                    cfg.nzb_max_download
-                )),
-                Line::from(format!(" eMule Enabled       : {}", cfg.emule_enabled)),
-                Line::from(format!(
-                    " eMule Max Download  : {} KB/s",
-                    cfg.emule_max_download
-                )),
-                Line::from(format!(
-                    " eMule Max Upload    : {} KB/s",
-                    cfg.emule_max_upload
-                )),
-                Line::from(format!(
-                    " Unzip Service       : {}",
-                    cfg.unzip_service_enabled
-                )),
-                Line::from(format!(" Default Dest.       : {default_dest}")),
-                Line::from(format!(" eMule Default Dest. : {emule_dest}")),
-            ];
+            // Store visible height for scroll clamping
+            self.popup_inner_height = chunks[0].height as usize;
 
-            create_popup(
-                " Server Info ",
-                bottom_title,
-                server_info_lines,
-                &mut self.popup_scroll_position,
-                false,
-                area,
+            block.render(popup_area, buf);
+
+            Paragraph::new(lines.clone())
+                .scroll((popup.scroll as u16, 0))
+                .wrap(Wrap { trim: true })
+                .render(chunks[0], buf);
+
+            let area_height = chunks[0].height as usize;
+            let mut scrollbar_state =
+                ScrollbarState::new(popup.lines.len().saturating_sub(area_height))
+                    .position(popup.scroll);
+            StatefulWidget::render(
+                Scrollbar::new(ScrollbarOrientation::VerticalRight)
+                    .begin_symbol(Some("↑"))
+                    .end_symbol(Some("↓")),
+                chunks[1],
                 buf,
+                &mut scrollbar_state,
             );
         }
     }
-
-    /// Show help window
-    pub fn render_help_popup(&mut self, area: Rect, buf: &mut Buffer) {
-        let help_text_lines = vec![
-            Line::from("Shortcuts:"),
-            Line::from(""),
-            Line::from(" a: Add a new task by URL from clipboard"),
-            Line::from(" A: Add a new task from file, from the current directory"),
-            Line::from(" d: Delete task"),
-            Line::from(" h: Show previous tab"),
-            Line::from(" i: Show server info"),
-            Line::from(" j: Move down / Scroll down in popups"),
-            Line::from(" k: Move up / Scrull up in popups"),
-            Line::from(" l: Show next tab"),
-            Line::from(" q: Quit or close any open popup"),
-            Line::from(" p: Pause / Resume task"),
-            Line::from(" r: Manually refresh tasks"),
-            Line::from(" ↑: Scroll up in the info panel"),
-            Line::from(" ↓: Scroll down in the info panel"),
-            Line::from(" ?: Show this help"),
-        ];
-
-        let bottom_title = " Scroll down/up if needed with <j> and <k>, close with <q> ";
-
-        create_popup(
-            " Help ",
-            bottom_title,
-            help_text_lines,
-            &mut self.popup_scroll_position,
-            false,
-            area,
-            buf,
-        );
-    }
-
-    /// Show add task window
-    pub fn render_add_task_popup(&mut self, area: Rect, buf: &mut Buffer) {
-        let clipboard_text = get_clipboard();
-        let add_task_text_lines = vec![Line::from(clipboard_text)];
-        let bottom_title = " Scroll down/up if needed with <j> and <k>, close with <q> ";
-
-        create_popup(
-            " URL copied, press <Enter> to add task or close with <q> or ESC ",
-            bottom_title,
-            add_task_text_lines,
-            &mut self.popup_scroll_position,
-            false,
-            area,
-            buf,
-        );
-    }
-
-    /// Show File picker
-    pub fn render_add_task_from_file_popup(&mut self, area: Rect, buf: &mut Buffer) {
-        create_filepicker_popup(
-            " File Picker - press <Enter> to add file or close with <q> or ESC ",
-            &mut self.selected_row_filepicker,
-            &mut self.popup_scroll_position,
-            area,
-            buf,
-            &self.dir_list,
-        );
-    }
-
-    /// Show error popup
-    pub fn render_error_popup(&mut self, area: Rect, buf: &mut Buffer) {
-        let error_text = Line::from(self.error_message.clone().unwrap_or_default());
-        let bottom_title = " Scroll down/up if needed with <j> and <k>, close with <q> ";
-
-        create_popup(
-            " Error ",
-            bottom_title,
-            vec![error_text],
-            &mut self.popup_scroll_position,
-            true,
-            area,
-            buf,
-        );
-    }
-
-    /// Show confirmation popup
-    pub fn render_delete_confirmation_popup(&mut self, area: Rect, buf: &mut Buffer) {
-        let confirm_text_lines = vec![Line::from(" (Y)es / (N)o ").alignment(Alignment::Center)];
-        let bottom_title = " Select <y> or <n>, close with <q> ";
-
-        create_popup(
-            " Confirm Task Deletion ",
-            bottom_title,
-            confirm_text_lines,
-            &mut self.popup_scroll_position,
-            true,
-            area,
-            buf,
-        );
-    }
 }
 
-/// Helper function for creating relative sized popups
-pub fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
-    // Raw size of the terminal window
-    let raw_w = area.width.saturating_mul(percent_x) / 100;
-    let raw_h = area.height.saturating_mul(percent_y) / 100;
+fn render_general_tab(task: &Task, area: Rect, buf: &mut Buffer) {
+    let destination = task
+        .additional
+        .as_ref()
+        .and_then(|a| a.detail.as_ref())
+        .map(|d| d.destination.clone())
+        .unwrap_or_else(|| "N/A".to_string());
 
-    // Enforce minimum of 3 rows and columns (1 border + 1 content + 1 border)
-    let w = raw_w.max(3).min(area.width);
-    let h = raw_h.max(3).min(area.height);
+    let created_time = task
+        .additional
+        .as_ref()
+        .and_then(|a| a.detail.as_ref())
+        .map(|d| d.created_time.to_string())
+        .unwrap_or_else(|| "N/A".to_string());
 
-    // Center it in the rendered area
-    let x = area.x + (area.width.saturating_sub(w)) / 2;
-    let y = area.y + (area.height.saturating_sub(h)) / 2;
-
-    Rect {
-        x,
-        y,
-        width: w,
-        height: h,
-    }
+    let text = vec![
+        Line::from(vec![
+            Span::styled("Title:       ", Style::default().fg(Color::LightCyan)),
+            Span::styled(task.title.clone(), Style::default().fg(Color::White)),
+        ]),
+        Line::from(vec![
+            Span::styled("ID:          ", Style::default().fg(Color::LightCyan)),
+            Span::styled(task.id.clone(), Style::default().fg(Color::White)),
+        ]),
+        Line::from(vec![
+            Span::styled("Destination: ", Style::default().fg(Color::LightCyan)),
+            Span::styled(destination, Style::default().fg(Color::White)),
+        ]),
+        Line::from(vec![
+            Span::styled("Created:     ", Style::default().fg(Color::LightCyan)),
+            Span::styled(created_time, Style::default().fg(Color::White)),
+        ]),
+        Line::from(vec![
+            Span::styled("User:        ", Style::default().fg(Color::LightCyan)),
+            Span::styled(task.username.clone(), Style::default().fg(Color::White)),
+        ]),
+        Line::from(vec![
+            Span::styled("Size:        ", Style::default().fg(Color::LightCyan)),
+            Span::styled(task.calculate_size(), Style::default().fg(Color::White)),
+        ]),
+        Line::from(vec![
+            Span::styled("Status:      ", Style::default().fg(Color::LightCyan)),
+            Span::styled(
+                format!("{:?}", task.status),
+                Style::default().fg(Color::Yellow),
+            ),
+        ]),
+        Line::from(vec![
+            Span::styled("ETA:         ", Style::default().fg(Color::LightCyan)),
+            Span::styled(
+                task.calculate_time_left(),
+                Style::default().fg(Color::White),
+            ),
+        ]),
+        Line::from(vec![
+            Span::styled("Ratio:       ", Style::default().fg(Color::LightCyan)),
+            Span::styled(
+                format!("{:.2}", task.calculate_ratio()),
+                Style::default().fg(Color::White),
+            ),
+        ]),
+    ];
+    Paragraph::new(text).render(area, buf);
 }
 
-/// Create popup
-fn create_popup(
-    popup_title: &str,
-    popup_bottom_title: &str,
-    popup_text_lines: Vec<Line>,
-    scroll_position: &mut usize,
-    is_error_popup: bool,
-    area: Rect,
-    buf: &mut Buffer,
-) {
-    // Count the lines in the text for the scrollbar
-    let popup_text_line_count = popup_text_lines.len();
+fn render_transfer_tab(task: &Task, area: Rect, buf: &mut Buffer) {
+    let (downloaded, uploaded, speed_up, speed_down) = task
+        .additional
+        .as_ref()
+        .and_then(|a| a.transfer.as_ref())
+        .map(|t| {
+            (
+                format!("{:.1} MB", t.size_downloaded as f64 / 1_048_576.0),
+                format!("{:.1} MB", t.size_uploaded as f64 / 1_048_576.0),
+                format_speed(t.speed_upload),
+                format_speed(t.speed_download),
+            )
+        })
+        .unwrap_or_else(|| ("N/A".into(), "N/A".into(), "N/A".into(), "N/A".into()));
 
-    // Create a Text from the lines
-    let popup_text = Text::from(popup_text_lines);
+    let progress = task.calculate_progress();
 
-    // Create a popup Rect
-    let popup_rect = centered_rect(60, 40, area);
+    let text = vec![
+        Line::from(vec![
+            Span::styled("Downloaded:  ", Style::default().fg(Color::LightCyan)),
+            Span::styled(downloaded, Style::default().fg(Color::White)),
+        ]),
+        Line::from(vec![
+            Span::styled("Uploaded:    ", Style::default().fg(Color::LightCyan)),
+            Span::styled(uploaded, Style::default().fg(Color::White)),
+        ]),
+        Line::from(vec![
+            Span::styled("Up Speed:    ", Style::default().fg(Color::LightCyan)),
+            Span::styled(speed_up, Style::default().fg(Color::Green)),
+        ]),
+        Line::from(vec![
+            Span::styled("Down Speed:  ", Style::default().fg(Color::LightCyan)),
+            Span::styled(speed_down, Style::default().fg(Color::Green)),
+        ]),
+        Line::from(vec![
+            Span::styled("Progress:    ", Style::default().fg(Color::LightCyan)),
+            render_progress_bar(progress, 20),
+        ]),
+        Line::from(vec![
+            Span::styled("Ratio:       ", Style::default().fg(Color::LightCyan)),
+            Span::styled(
+                format!("{:.2}", task.calculate_ratio()),
+                Style::default().fg(Color::White),
+            ),
+        ]),
+        Line::from(vec![
+            Span::styled("ETA:         ", Style::default().fg(Color::LightCyan)),
+            Span::styled(
+                task.calculate_time_left(),
+                Style::default().fg(Color::White),
+            ),
+        ]),
+    ];
+    Paragraph::new(text).render(area, buf);
+}
 
-    // Remove anything from the popup's background
-    Clear.render(popup_rect, buf);
+fn render_tracker_tab(task: &Task, area: Rect, buf: &mut Buffer, scroll: usize, count: usize) {
+    let chunks = Layout::horizontal([Constraint::Min(0), Constraint::Length(1)]).split(area);
 
-    // Visible lines and Max scroll value for the scrollbar
-    let visible_lines = popup_rect.height.saturating_sub(2);
-    let max_scroll = popup_text_line_count.saturating_sub(visible_lines as usize);
+    let rows: Vec<Row> = task
+        .additional
+        .as_ref()
+        .and_then(|a| a.tracker.as_ref())
+        .map(|trackers| {
+            trackers
+                .iter()
+                .map(|t| {
+                    Row::new(vec![
+                        Cell::from(t.url.clone()).style(Style::default().fg(Color::White)),
+                        Cell::from(format!("{:?}", t.status))
+                            .style(Style::default().fg(Color::Yellow)),
+                    ])
+                })
+                .collect()
+        })
+        .unwrap_or_default();
 
-    // Clamp the scroll position and update it at the same time so it will not go infinately
-    if *scroll_position > max_scroll {
-        *scroll_position = max_scroll;
-    }
+    let header = Row::new(vec![
+        Cell::from("URL").style(Style::default().fg(Color::Yellow).underlined()),
+        Cell::from("Status").style(Style::default().fg(Color::Yellow).underlined()),
+    ]);
 
-    let popup_block = Block::bordered()
-        .title(popup_title)
-        .title_bottom(Line::from(popup_bottom_title).alignment(Alignment::Center))
-        .title_alignment(Alignment::Left)
-        .border_type(BorderType::Rounded);
+    let widths = [Constraint::Percentage(80), Constraint::Percentage(20)];
 
-    // Display the text
-    let fg_color: Color = if is_error_popup {
-        Color::LightRed
-    } else {
-        Color::White
-    };
+    let area_height = chunks[0].height as usize;
 
-    let popup_paragraph = Paragraph::new(popup_text)
-        .block(popup_block)
-        .scroll((*scroll_position as u16, 0))
-        .fg(fg_color)
-        .bg(Color::Black);
+    let table = Table::new(rows, widths).header(header).column_spacing(1);
 
-    // Render the popup
-    popup_paragraph.render(popup_rect, buf);
+    let mut state = TableState::default().with_offset(scroll);
+    StatefulWidget::render(table, chunks[0], buf, &mut state);
 
-    // Render stateful widget of the table scrollbar
-    let popup_scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
-        .begin_symbol(Some("↑"))
-        .end_symbol(Some("↓"));
-    let scroll_range = popup_text_line_count
-        .saturating_sub(visible_lines as usize)
-        .max(1);
-    let mut popup_scrollbar_state = ScrollbarState::new(scroll_range)
-        .position(*scroll_position)
-        .viewport_content_length(visible_lines as usize);
-
+    let mut scrollbar_state =
+        ScrollbarState::new(count.saturating_sub(area_height)).position(scroll);
     StatefulWidget::render(
-        popup_scrollbar,
-        popup_rect.inner(Margin {
-            vertical: 1,
-            horizontal: 0,
-        }),
+        Scrollbar::new(ScrollbarOrientation::VerticalRight)
+            .begin_symbol(Some("↑"))
+            .end_symbol(Some("↓")),
+        chunks[1],
         buf,
-        &mut popup_scrollbar_state,
+        &mut scrollbar_state,
     );
 }
 
-pub fn get_selected_file<'a>(
-    files: &'a [FileAttributes],
-    state: &'a TableState,
-) -> Option<&'a FileAttributes> {
-    state.selected().map(|i| &files[i])
+fn render_peers_tab(task: &Task, area: Rect, buf: &mut Buffer, scroll: usize, count: usize) {
+    let chunks = Layout::horizontal([Constraint::Min(0), Constraint::Length(1)]).split(area);
+
+    let rows: Vec<Row> = task
+        .additional
+        .as_ref()
+        .and_then(|a| a.peer.as_ref())
+        .map(|peers| {
+            peers
+                .iter()
+                .map(|p| {
+                    Row::new(vec![
+                        Cell::from(p.address.clone()).style(Style::default().fg(Color::White)),
+                        Cell::from(format_speed(p.speed_download))
+                            .style(Style::default().fg(Color::Green)),
+                        Cell::from(format_speed(p.speed_upload))
+                            .style(Style::default().fg(Color::Green)),
+                        Cell::from(p.agent.clone()).style(Style::default().fg(Color::DarkGray)),
+                    ])
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let header = Row::new(vec![
+        Cell::from("Address").style(Style::default().fg(Color::Yellow).underlined()),
+        Cell::from("Down").style(Style::default().fg(Color::Yellow).underlined()),
+        Cell::from("Up").style(Style::default().fg(Color::Yellow).underlined()),
+        Cell::from("Client").style(Style::default().fg(Color::Yellow).underlined()),
+    ]);
+
+    let widths = [
+        Constraint::Percentage(35),
+        Constraint::Percentage(15),
+        Constraint::Percentage(15),
+        Constraint::Percentage(35),
+    ];
+
+    let area_height = chunks[0].height as usize;
+
+    let table = Table::new(rows, widths).header(header).column_spacing(1);
+
+    let mut state = TableState::default().with_offset(scroll);
+    StatefulWidget::render(table, chunks[0], buf, &mut state);
+
+    let mut scrollbar_state =
+        ScrollbarState::new(count.saturating_sub(area_height)).position(scroll);
+    StatefulWidget::render(
+        Scrollbar::new(ScrollbarOrientation::VerticalRight)
+            .begin_symbol(Some("↑"))
+            .end_symbol(Some("↓")),
+        chunks[1],
+        buf,
+        &mut scrollbar_state,
+    );
 }
 
-/// Create filepicker popup
-fn create_filepicker_popup(
-    popup_title: &str,
-    selected_row: &mut TableState,
-    scroll_position: &mut usize,
-    area: Rect,
-    buf: &mut Buffer,
-    dir_list: &[FileAttributes],
-) {
-    // Create a popup Rect
-    let popup_rect = centered_rect(50, 40, area);
+fn render_files_tab(task: &Task, area: Rect, buf: &mut Buffer, scroll: usize, count: usize) {
+    let chunks = Layout::horizontal([Constraint::Min(0), Constraint::Length(1)]).split(area);
 
-    let rows: Vec<Row> = dir_list
-        .iter()
-        .map(|dir| {
-            let color = match dir.filetype.as_str() {
-                "torrent" => Color::Green,
-                _ => Color::Gray,
-            };
-            Row::new(vec![
-                Cell::from(dir.filename.clone()),
-                Cell::from(dir.filetype.clone()),
-            ])
-            .style(Style::default().fg(color))
+    let rows: Vec<Row> = task
+        .additional
+        .as_ref()
+        .and_then(|a| a.file.as_ref())
+        .map(|files| {
+            files
+                .iter()
+                .map(|f| {
+                    let progress = if f.size > 0 {
+                        format!("{:.1}%", f.size_downloaded as f64 / f.size as f64 * 100.0)
+                    } else {
+                        "N/A".to_string()
+                    };
+                    Row::new(vec![
+                        Cell::from(f.filename.clone()).style(Style::default().fg(Color::White)),
+                        Cell::from(progress).style(Style::default().fg(Color::Yellow)),
+                    ])
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let header = Row::new(vec![
+        Cell::from("Filename").style(Style::default().fg(Color::Yellow).underlined()),
+        Cell::from("Progress").style(Style::default().fg(Color::Yellow).underlined()),
+    ]);
+
+    let widths = [Constraint::Percentage(90), Constraint::Percentage(10)];
+
+    let area_height = chunks[0].height as usize;
+
+    let table = Table::new(rows, widths).header(header).column_spacing(1);
+
+    let mut state = TableState::default().with_offset(scroll);
+    StatefulWidget::render(table, chunks[0], buf, &mut state);
+
+    let mut scrollbar_state =
+        ScrollbarState::new(count.saturating_sub(area_height)).position(scroll);
+    StatefulWidget::render(
+        Scrollbar::new(ScrollbarOrientation::VerticalRight)
+            .begin_symbol(Some("↑"))
+            .end_symbol(Some("↓")),
+        chunks[1],
+        buf,
+        &mut scrollbar_state,
+    );
+}
+
+fn render_progress_bar(progress: f64, width: usize) -> Span<'static> {
+    let filled = (progress / 100.0 * width as f64).round() as usize;
+    let label = format!("{:>3.0}%", progress);
+
+    // Build the bar with the label centered inside it
+    let bar: String = (0..width)
+        .map(|i| {
+            let label_start = (width.saturating_sub(label.len())) / 2;
+            let label_idx = i.wrapping_sub(label_start);
+            if label_idx < label.len() {
+                label.chars().nth(label_idx).unwrap_or(' ')
+            } else if i < filled {
+                '█'
+            } else {
+                '░'
+            }
         })
         .collect();
 
-    // Auto-select the first row if nothing is selected
-    if selected_row.selected().is_none() && !rows.is_empty() {
-        selected_row.select(Some(0));
+    let color = if progress >= 100.0 {
+        Color::Green
+    } else if progress >= 50.0 {
+        Color::Yellow
+    } else {
+        Color::Red
+    };
+    Span::styled(bar, Style::default().fg(color))
+}
+
+fn format_speed(bytes_per_sec: u64) -> String {
+    if bytes_per_sec >= 1_048_576 {
+        format!("{:.1} MB/s", bytes_per_sec as f64 / 1_048_576.0)
+    } else if bytes_per_sec >= 1024 {
+        format!("{:.0} KB/s", bytes_per_sec as f64 / 1024.0)
+    } else if bytes_per_sec > 0 {
+        format!("{} B/s", bytes_per_sec)
+    } else {
+        String::new() // show nothing when idle
     }
-    // Remove anything from the popup's background
-    Clear.render(popup_rect, buf);
+}
 
-    // Visible lines and Max scroll value for the scrollbar
-    let visible_lines = popup_rect.height.saturating_sub(2);
-    let max_scroll = rows.len().saturating_sub(visible_lines as usize);
-
-    // Clamp the scroll position and update it at the same time so it will not go infinately
-    if *scroll_position > max_scroll {
-        *scroll_position = max_scroll;
+fn truncate(s: &str, max_chars: usize) -> String {
+    if s.chars().count() > max_chars {
+        let truncated: String = s.chars().take(max_chars - 1).collect();
+        format!("{}…", truncated)
+    } else {
+        s.to_string()
     }
-
-    let table_block = Block::bordered()
-        .title(popup_title)
-        .title_alignment(Alignment::Center)
-        .title_bottom(
-            Line::from(" !! EXPERIMENTAL: may crash !! ")
-                .alignment(Alignment::Center)
-                .style(Style::default().fg(Color::LightRed)),
-        )
-        .border_type(BorderType::Rounded);
-
-    // Row selection
-    let table_row_index = selected_row.selected().unwrap_or(0);
-    let table_state = selected_row;
-
-    // Create the table with content and styling
-    let header_titles = vec!["Filename", "Type"];
-    let header =
-        Row::new(header_titles).style(Style::default().fg(Color::White).bg(Color::DarkGray).bold());
-
-    let widths = [
-        Constraint::Percentage(80), // Filename
-        Constraint::Percentage(20), // Extension
-    ];
-
-    // Add a scrollbar
-    let table_scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
-        .begin_symbol(Some("↑"))
-        .end_symbol(Some("↓"));
-    let mut table_scrollbar_state = ScrollbarState::new(rows.len())
-        .position(table_row_index)
-        .viewport_content_length(1);
-
-    let table = Table::new(rows, widths)
-        .block(table_block)
-        .header(header)
-        .row_highlight_style(Style::new().reversed())
-        .column_spacing(1);
-
-    // Render stateful widget of the table
-    StatefulWidget::render(table, popup_rect, buf, table_state);
-    // Render stateful widget of the table scrollbar
-    StatefulWidget::render(
-        table_scrollbar,
-        popup_rect.inner(Margin {
-            vertical: 1,
-            horizontal: 0,
-        }),
-        buf,
-        &mut table_scrollbar_state,
-    );
 }

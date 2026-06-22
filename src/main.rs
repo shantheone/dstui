@@ -1,53 +1,95 @@
-use crate::api::SynologyClient;
 use crate::app::App;
-use crate::config::{AppConfig, run_config_wizard};
-use std::error::Error;
+use config::load_config;
+use setup::run_setup;
+use std::io::{self, Write};
+use tokio::time::{Duration, interval};
 
-pub mod api;
 pub mod app;
-pub mod config;
+mod config;
 pub mod event;
+mod setup;
 pub mod ui;
-pub mod util;
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn Error>> {
-    println!("+----------------------------------+");
-    println!("|   Synology DownloadStation TUI   |");
-    println!("+----------------------------------+");
-    let config = if let Some(cfg) = AppConfig::load() {
-        cfg
-    } else {
-        // No config file found -> run the wizard
-        let cfg = run_config_wizard()?;
-        cfg.save()?; // Save config to file
-        cfg
+async fn main() -> anyhow::Result<()> {
+    // Load config first, before anything else
+    let config = match load_config() {
+        Ok(c) => c,
+        Err(e) if e.to_string() == "no_config" => {
+            // No config file — run the setup wizard
+            match run_setup() {
+                Ok(c) => c,
+                Err(e) => {
+                    eprintln!("Setup failed: {}", e);
+                    std::process::exit(1);
+                }
+            }
+        }
+        Err(e) => {
+            eprintln!("Configuration error:");
+            eprintln!("  {}", e);
+            eprintln!();
+            eprintln!(
+                "Config file location: {}",
+                config::config_path()
+                    .map(|p| p.display().to_string())
+                    .unwrap_or_default()
+            );
+            std::process::exit(1);
+        }
     };
 
-    // Build client call from the config
-    let endpoint = format!("{}:{}", config.server_url, config.server_port);
-    let mut client = SynologyClient::new(&endpoint);
+    // Spinner setup
+    let spinner_frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+    let mut frame = 0;
 
-    // Logging in
-    println!("󰍂  Logging in and downloading task list. Just a sec...");
-    client.get_available_apis().await?;
-    client
-        .login(&config.username, &config.password, "DownloadStation")
-        .await
-        .map_err(|e| format!("Login failed: {e}"))?;
+    let app_future = tokio::spawn(App::new(config));
 
-    // Launching the main app
-    {
-        let mut app_term = ratatui::init();
-        let app = App::new();
+    let mut ticker = interval(Duration::from_millis(80));
+    loop {
+        ticker.tick().await;
+        print!(
+            "\r {} Connecting to DownloadStation...",
+            spinner_frames[frame % spinner_frames.len()]
+        );
+        io::stdout().flush()?;
+        frame += 1;
 
-        app.run(&mut app_term, &mut client).await?;
+        if app_future.is_finished() {
+            break;
+        }
     }
-    // Restore terminal
+
+    // Clear the spinner line
+    print!("\r{}\r", " ".repeat(50));
+    io::stdout().flush()?;
+
+    // Handle connection error cleanly before ratatui takes over
+    let app = match app_future.await? {
+        Ok(app) => app,
+        Err(e) => {
+            eprintln!("Failed to connect to DownloadStation:");
+            eprintln!("  {}", e);
+            eprintln!();
+            eprintln!(
+                "Please check your config file: {}",
+                config::config_path()
+                    .map(|p| p.display().to_string())
+                    .unwrap_or_else(|_| "unknown".to_string())
+            );
+            std::process::exit(1);
+        }
+    };
+
+    // Only initialize ratatui after successful connection
+    let terminal = ratatui::init();
+    let result = app.run(terminal).await;
     ratatui::restore();
 
-    // Call logout method to close the connection
-    client.logout("DownloadStation").await?;
+    if let Err(e) = result {
+        eprintln!("Application error: {}", e);
+        std::process::exit(1);
+    }
 
     Ok(())
 }

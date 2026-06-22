@@ -2,7 +2,7 @@ use crate::config::{Config, config_path};
 use crate::event::{AppEvent, Event, EventHandler, TICK_FPS};
 use ratatui::{
     DefaultTerminal,
-    crossterm::event::{KeyCode, KeyEvent, KeyModifiers},
+    crossterm::event::{KeyCode, KeyEvent},
     crossterm::{cursor, execute},
     style::{Color, Style},
     widgets::{Block, BorderType, TableState},
@@ -376,9 +376,6 @@ impl App {
         // Finally, normal key handling
         match key_event.code {
             KeyCode::Esc | KeyCode::Char('q') => self.events.send(AppEvent::Quit),
-            KeyCode::Char('c' | 'C') if key_event.modifiers == KeyModifiers::CONTROL => {
-                self.events.send(AppEvent::Quit)
-            }
             KeyCode::Char('?') => self.events.send(AppEvent::PopUp),
             KeyCode::Char('r') => self.events.send(AppEvent::Refresh),
             KeyCode::Char('a') => self.events.send(AppEvent::OpenFilePicker),

@@ -568,7 +568,7 @@ fn render_peers_tab(task: &Task, area: Rect, buf: &mut Buffer, scroll: usize, co
                             .style(Style::default().fg(Color::Green)),
                         Cell::from(format_speed(p.speed_upload))
                             .style(Style::default().fg(Color::Green)),
-                        Cell::from(p.agent.clone()).style(Style::default().fg(Color::DarkGray)),
+                        Cell::from(p.agent.clone()).style(Style::default().fg(Color::Yellow)),
                     ])
                 })
                 .collect()

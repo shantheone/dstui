@@ -287,8 +287,9 @@ impl App {
                         vec![
                             String::new(),
                             "Help:".into(),
-                            "j / k     — navigate tasks and info panel rows, scroll help text"
+                            "j / k     — navigate tasks and info panel rows, scroll help text, navigate in the file picker"
                                 .into(),
+                            "h / l     — navigate tabs left and right when the info panel is active, navigate in the file picker".into(),
                             "p         — pause / resume selected task".into(),
                             "c         — complete selected task".into(),
                             "C         — clear completed tasks".into(),

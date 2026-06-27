@@ -3,17 +3,27 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct Config {
-    pub connection: ConnectionConfig,
-    pub downloads: DownloadConfig,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
 pub struct ConnectionConfig {
     pub url: String,
     pub username: String,
     pub password: String,
     pub accept_invalid_certs: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize, Default)]
+pub struct SortConfig {
+    #[serde(default)]
+    pub column: String, // "name", "size", "progress", etc.
+    #[serde(default)]
+    pub order: String, // "ascending" or "descending"
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Config {
+    pub connection: ConnectionConfig,
+    pub downloads: DownloadConfig,
+    #[serde(default)]
+    pub sorting: SortConfig,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -39,6 +49,10 @@ impl Default for Config {
             downloads: DownloadConfig {
                 destination: String::from("downloads"),
                 refresh_interval: Some(30),
+            },
+            sorting: SortConfig {
+                column: String::from("name"),
+                order: String::from("ascending"),
             },
         }
     }

@@ -1,4 +1,4 @@
-use crate::config::{Config, ConnectionConfig, DownloadConfig, config_path};
+use crate::config::{Config, ConnectionConfig, DownloadConfig, SortConfig, config_path};
 use anyhow::Result;
 use std::io::{self, Write};
 
@@ -64,7 +64,7 @@ pub fn run_setup() -> Result<Config> {
     println!("  Press Enter to accept the default value shown in brackets.");
     println!();
 
-    println!("  ── Connection ──────────────────────────");
+    println!("  ── Connection ───────────────────────────────────────────────────");
     let url = prompt("DiskStation URL", "http://diskstation:5000")?;
     let username = prompt("Username", "admin")?;
     let password = prompt_password("Password")?;
@@ -74,9 +74,26 @@ pub fn run_setup() -> Result<Config> {
     };
     println!();
 
-    println!("  ── Downloads ───────────────────────────");
+    println!("  ── Downloads ────────────────────────────────────────────────────");
     let destination = prompt("Download destination", "downloads")?;
     let refresh_interval = prompt_optional_u64("Auto-refresh interval (seconds)", Some(30))?;
+    println!();
+
+    println!("  ── Sorting ──────────────────────────────────────────────────────");
+    let sort_column = {
+        println!("  Available columns:          name, size, downloaded, uploaded,");
+        println!("                              progress, uploadspeed, downloadspeed,");
+        println!("                              ratio, status");
+        prompt("Default sort column", "name")?
+    };
+    let sort_order = {
+        let input = prompt("Default sort order (ascending/descending)", "ascending")?;
+        if input.to_lowercase().starts_with('d') {
+            "descending".to_string()
+        } else {
+            "ascending".to_string()
+        }
+    };
     println!();
 
     let config = Config {
@@ -89,6 +106,10 @@ pub fn run_setup() -> Result<Config> {
         downloads: DownloadConfig {
             destination,
             refresh_interval,
+        },
+        sorting: SortConfig {
+            column: sort_column,
+            order: sort_order,
         },
     };
 

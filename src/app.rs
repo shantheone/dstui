@@ -138,6 +138,10 @@ impl App {
             .filter(|&s| s > 0)
             .map(|s| (s as f64 * TICK_FPS) as u64);
 
+        // Sorting setting from config file
+        let sort_column = SortColumn::from_str(&config.sorting.column);
+        let sort_order = SortOrder::from_str(&config.sorting.order);
+
         let mut app = Self {
             running: true,
             headers: vec![
@@ -183,8 +187,8 @@ impl App {
             spinner_frame: 0,
             loading: false,
             config_path,
-            sort_column: SortColumn::Name,
-            sort_order: SortOrder::Ascending,
+            sort_column,
+            sort_order,
         };
 
         app.refresh_tasks().await?;
@@ -902,5 +906,30 @@ impl App {
         sorted
             .get(idx)
             .and_then(|task| self.tasks.iter().position(|t| t.id == task.id))
+    }
+}
+
+impl SortColumn {
+    fn from_str(s: &str) -> Self {
+        match s.to_lowercase().as_str() {
+            "size" => SortColumn::Size,
+            "downloaded" => SortColumn::Downloaded,
+            "uploaded" => SortColumn::Uploaded,
+            "progress" => SortColumn::Progress,
+            "uploadspeed" | "upload_speed" => SortColumn::UploadSpeed,
+            "downloadspeed" | "download_speed" => SortColumn::DownloadSpeed,
+            "ratio" => SortColumn::Ratio,
+            "status" => SortColumn::Status,
+            _ => SortColumn::Name,
+        }
+    }
+}
+
+impl SortOrder {
+    fn from_str(s: &str) -> Self {
+        match s.to_lowercase().as_str() {
+            "descending" | "desc" => SortOrder::Descending,
+            _ => SortOrder::Ascending,
+        }
     }
 }

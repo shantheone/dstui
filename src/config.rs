@@ -7,7 +7,10 @@ pub struct ConnectionConfig {
     pub url: String,
     pub username: String,
     pub password: String,
+    #[serde(default)]
     pub accept_invalid_certs: bool,
+    #[serde(default = "default_timeout")]
+    pub timeout_ms: u64,
 }
 
 #[derive(Debug, Serialize, Deserialize, Default)]
@@ -37,6 +40,10 @@ fn default_refresh_interval() -> Option<u64> {
     Some(30)
 }
 
+fn default_timeout() -> u64 {
+    3000
+}
+
 impl Default for Config {
     fn default() -> Self {
         Self {
@@ -45,6 +52,7 @@ impl Default for Config {
                 username: String::from("admin"),
                 password: String::new(),
                 accept_invalid_certs: false,
+                timeout_ms: default_timeout(),
             },
             downloads: DownloadConfig {
                 destination: String::from("downloads"),

@@ -72,6 +72,10 @@ pub fn run_setup() -> Result<Config> {
         let input = prompt("Accept invalid/self-signed certificates? (y/n)", "n")?;
         input.trim().to_lowercase() == "y"
     };
+    let timeout_ms = {
+        let input = prompt("Connection timeout (ms)", "3000")?;
+        input.parse::<u64>().unwrap_or(3000)
+    };
     println!();
 
     println!("  ── Downloads ────────────────────────────────────────────────────");
@@ -102,6 +106,7 @@ pub fn run_setup() -> Result<Config> {
             username,
             password,
             accept_invalid_certs,
+            timeout_ms,
         },
         downloads: DownloadConfig {
             destination,

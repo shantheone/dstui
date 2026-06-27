@@ -123,6 +123,7 @@ impl App {
             .username(&config.connection.username)
             .password(&config.connection.password)
             .danger_accept_invalid_certs(config.connection.accept_invalid_certs)
+            .timeout(config.connection.timeout_ms)
             .build()?;
 
         client.authorize().await?;

@@ -448,18 +448,33 @@ impl App {
 
     pub async fn refresh_tasks(&mut self) -> anyhow::Result<()> {
         if let Some(client) = &self.client {
-            self.loading = true;
-            self.refreshing_tasks = true;
+            // Remember the id of the currently selected task before refreshing
+            let previously_selected_id = self
+                .selected_task_in_sorted()
+                .and_then(|idx| self.tasks.get(idx))
+                .map(|task| task.id.clone());
+
             let result = client.get_tasks().await;
-            self.loading = false;
-            self.refreshing_tasks = false;
             match result {
                 Ok(result) => {
                     self.tasks = result.task;
-                    if !self.tasks.is_empty() {
+
+                    if self.tasks.is_empty() {
+                        self.selected_task.select(None);
+                    } else if let Some(prev_id) = previously_selected_id {
+                        // Try to find the same task in the sorted view after refresh
+                        let sorted = self.sorted_tasks();
+                        let new_idx = sorted.iter().position(|t| t.id == prev_id);
+                        match new_idx {
+                            Some(idx) => self.selected_task.select(Some(idx)),
+                            // Task disappeared (completed/removed) — fall back to first row
+                            None => self.selected_task.select(Some(0)),
+                        }
+                    } else {
                         self.selected_task.select(Some(0));
-                        self.update_info_counts();
                     }
+
+                    self.update_info_counts();
                 }
                 Err(e) => {
                     self.show_popup(vec!["Failed to get tasks:".into(), e.to_string()], true);

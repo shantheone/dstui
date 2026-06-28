@@ -1,6 +1,6 @@
 [package]
 name = "dstui"
-version = "0.8.0"
+version = "0.8.1"
 description = "dstui - a Synology Download Station CLI client"
 authors = ["shan <shandoor@gmail.com>"]
 license = "MIT"

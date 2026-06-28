@@ -1,4 +1,4 @@
-use crate::app::{ActivePanel, App, SPINNER_FRAMES, SortColumn, SortOrder};
+use crate::app::{ActivePanel, App, ConnectionStatus, SPINNER_FRAMES, SortColumn, SortOrder};
 use ratatui::{
     buffer::Buffer,
     layout::{Alignment, Constraint, Direction, Layout, Margin, Rect},
@@ -16,15 +16,6 @@ impl Widget for &mut App {
         let chunks =
             Layout::vertical([Constraint::Percentage(40), Constraint::Percentage(60)]).split(area);
 
-        // Compute total speeds
-        let (total_down, total_up) = self.tasks.iter().fold((0u64, 0u64), |acc, task| {
-            task.additional
-                .as_ref()
-                .and_then(|a| a.transfer.as_ref())
-                .map(|t| (acc.0 + t.speed_download, acc.1 + t.speed_upload))
-                .unwrap_or(acc)
-        });
-
         // Build headers with sort indicator
         let sort_indicator = |col: &SortColumn| -> &str {
             if &self.sort_column == col {
@@ -37,36 +28,43 @@ impl Widget for &mut App {
             }
         };
 
+        let connection_indicator = match self.connection_status {
+            ConnectionStatus::Connected => Span::styled(" ● ", Style::default().fg(Color::Green)),
+            ConnectionStatus::Disconnected => Span::styled(" ● ", Style::default().fg(Color::Red)),
+        };
         let spinner = SPINNER_FRAMES[self.spinner_frame];
-        let auto_refresh_title;
-        let spinner_title;
-        let stats_title;
-        let title_text = if self.loading {
-            spinner_title = format!(" {} DownloadStation TUI Client ", spinner);
-            spinner_title.as_str().bold().light_cyan()
-        } else if total_down > 0 || total_up > 0 {
-            stats_title = format!(
-                " DownloadStation TUI Client  ↓ {}  ↑ {} ",
-                format_speed(total_down),
-                format_speed(total_up),
-            );
-            stats_title.as_str().bold().light_cyan()
+        let title_line = if self.loading {
+            Line::from(vec![
+                connection_indicator,
+                Span::styled(
+                    format!("{} DownloadStation TUI Client ", spinner),
+                    Style::default().fg(Color::Blue).bold(),
+                ),
+            ])
         } else {
             match self.refresh_interval {
-                Some(ticks) => {
-                    auto_refresh_title = format!(
-                        " DownloadStation TUI Client - [Auto-refresh: {}s] ",
-                        ticks / 30
-                    );
-                    auto_refresh_title.as_str().bold().light_cyan()
-                }
-                None => " DownloadStation TUI Client - [Auto-refresh: off] "
-                    .bold()
-                    .light_cyan(),
+                Some(ticks) => Line::from(vec![
+                    connection_indicator,
+                    Span::styled(
+                        format!(
+                            "DownloadStation TUI Client - [Auto-refresh: {}s] ",
+                            ticks / 30
+                        ),
+                        Style::default().fg(Color::Blue).bold(),
+                    ),
+                ]),
+                None => Line::from(vec![
+                    connection_indicator,
+                    Span::styled(
+                        "DownloadStation TUI Client - [Auto-refresh: off] ",
+                        Style::default().fg(Color::Blue).bold(),
+                    ),
+                ]),
             }
         };
+
         let table_block = Block::bordered()
-            .title(title_text)
+            .title(title_line)
             .title_alignment(Alignment::Center)
             .border_type(BorderType::Rounded)
             .border_style(match self.active_panel {

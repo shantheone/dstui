@@ -19,6 +19,12 @@ use tui_input::backend::crossterm::EventHandler as InputEventHandler;
 // Spinner frames
 pub const SPINNER_FRAMES: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
+#[derive(Debug, Clone, PartialEq)]
+pub enum ConnectionStatus {
+    Connected,
+    Disconnected,
+}
+
 #[derive(Debug, PartialEq, Clone)]
 pub enum SortColumn {
     Name,
@@ -95,6 +101,7 @@ pub struct App {
     pub config_path: String,
     pub sort_column: SortColumn,
     pub sort_order: SortOrder,
+    pub connection_status: ConnectionStatus,
 }
 
 fn move_next(state: &mut TableState, row_count: usize) {
@@ -190,6 +197,7 @@ impl App {
             config_path,
             sort_column,
             sort_order,
+            connection_status: ConnectionStatus::Connected,
         };
 
         app.refresh_tasks().await?;
@@ -448,7 +456,6 @@ impl App {
 
     pub async fn refresh_tasks(&mut self) -> anyhow::Result<()> {
         if let Some(client) = &self.client {
-            // Remember the id of the currently selected task before refreshing
             let previously_selected_id = self
                 .selected_task_in_sorted()
                 .and_then(|idx| self.tasks.get(idx))
@@ -457,17 +464,16 @@ impl App {
             let result = client.get_tasks().await;
             match result {
                 Ok(result) => {
+                    self.connection_status = ConnectionStatus::Connected;
                     self.tasks = result.task;
 
                     if self.tasks.is_empty() {
                         self.selected_task.select(None);
                     } else if let Some(prev_id) = previously_selected_id {
-                        // Try to find the same task in the sorted view after refresh
                         let sorted = self.sorted_tasks();
                         let new_idx = sorted.iter().position(|t| t.id == prev_id);
                         match new_idx {
                             Some(idx) => self.selected_task.select(Some(idx)),
-                            // Task disappeared (completed/removed) — fall back to first row
                             None => self.selected_task.select(Some(0)),
                         }
                     } else {
@@ -477,6 +483,7 @@ impl App {
                     self.update_info_counts();
                 }
                 Err(e) => {
+                    self.connection_status = ConnectionStatus::Disconnected;
                     self.show_popup(vec!["Failed to get tasks:".into(), e.to_string()], true);
                 }
             }

@@ -378,6 +378,33 @@ impl Widget for &mut App {
                 &mut scrollbar_state,
             );
         }
+
+        if let Some(notification) = &self.notification {
+            let message = format!(" {} ", notification.message);
+            let width = (message.chars().count() as u16 + 2).min(area.width.saturating_sub(2));
+            let height = 3;
+
+            let notif_area = Rect {
+                x: area.x + area.width.saturating_sub(width + 1),
+                y: area.y + area.height.saturating_sub(height + 1),
+                width,
+                height,
+            };
+
+            Clear.render(notif_area, buf);
+
+            let block = Block::bordered()
+                .border_type(BorderType::Rounded)
+                .border_style(Style::default().fg(Color::Green));
+
+            let inner = block.inner(notif_area);
+            block.render(notif_area, buf);
+
+            Paragraph::new(message)
+                .style(Style::default().fg(Color::LightGreen))
+                .alignment(Alignment::Center)
+                .render(inner, buf);
+        }
     }
 }
 

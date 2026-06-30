@@ -57,6 +57,8 @@ pub enum AppEvent {
     DeleteTask,
     ConfirmAction,
     CancelAction,
+    /// Manual config reload
+    ReloadConfig,
 }
 
 /// Terminal event handler.

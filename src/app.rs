@@ -19,6 +19,12 @@ use tui_input::backend::crossterm::EventHandler as InputEventHandler;
 // Spinner frames
 pub const SPINNER_FRAMES: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
+#[derive(Debug, Clone)]
+pub struct Notification {
+    pub message: String,
+    pub ticks_remaining: u64,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum ConnectionStatus {
     Connected,
@@ -102,6 +108,7 @@ pub struct App {
     pub sort_column: SortColumn,
     pub sort_order: SortOrder,
     pub connection_status: ConnectionStatus,
+    pub notification: Option<Notification>,
 }
 
 fn move_next(state: &mut TableState, row_count: usize) {
@@ -198,6 +205,7 @@ impl App {
             sort_column,
             sort_order,
             connection_status: ConnectionStatus::Connected,
+            notification: None,
         };
 
         app.refresh_tasks().await?;
@@ -310,6 +318,7 @@ impl App {
                             "A         — add task by URL".into(),
                             "d         — delete selected task".into(),
                             "r         — manually refresh tasks".into(),
+                            "R         — reload config (only applies to destination, refresh and sort settings)".into(),
                             "1-9       — sort by column (again to reverse)".into(),
                             "Tab       — switch panels".into(),
                             "?         — toggle this help popup".into(),
@@ -322,6 +331,7 @@ impl App {
                     AppEvent::DeleteTask => self.request_delete_task(),
                     AppEvent::ConfirmAction => self.confirm_action().await?,
                     AppEvent::CancelAction => self.cancel_action(),
+                    AppEvent::ReloadConfig => self.reload_config().await?,
                 },
             }
         }
@@ -421,6 +431,8 @@ impl App {
                 }
             }
             KeyCode::Char('d') => self.events.send(AppEvent::DeleteTask),
+            // Key for reloading config file manually
+            KeyCode::Char('R') => self.events.send(AppEvent::ReloadConfig),
             // Keys for sorting the columns
             KeyCode::Char('1') => self.sort_by(SortColumn::Name),
             KeyCode::Char('2') => self.sort_by(SortColumn::Size),
@@ -440,6 +452,15 @@ impl App {
         if self.loading {
             self.spinner_frame = (self.spinner_frame + 1) % SPINNER_FRAMES.len();
         }
+
+        if let Some(notification) = &mut self.notification {
+            if notification.ticks_remaining > 0 {
+                notification.ticks_remaining -= 1;
+            } else {
+                self.notification = None;
+            }
+        }
+
         if let Some(interval) = self.refresh_interval {
             self.tick_count += 1;
             if self.tick_count >= interval {
@@ -456,6 +477,13 @@ impl App {
 
     pub async fn refresh_tasks(&mut self) -> anyhow::Result<()> {
         if let Some(client) = &self.client {
+            // Snapshot id -> status string before refreshing
+            let previous_statuses: std::collections::HashMap<String, String> = self
+                .tasks
+                .iter()
+                .map(|t| (t.id.clone(), format!("{:?}", t.status)))
+                .collect();
+
             let previously_selected_id = self
                 .selected_task_in_sorted()
                 .and_then(|idx| self.tasks.get(idx))
@@ -464,8 +492,21 @@ impl App {
             let result = client.get_tasks().await;
             match result {
                 Ok(result) => {
-                    self.connection_status = ConnectionStatus::Connected;
                     self.tasks = result.task;
+
+                    let newly_finished: Vec<String> = self
+                        .tasks
+                        .iter()
+                        .filter(|t| {
+                            let current_status = format!("{:?}", t.status);
+                            current_status == "Finished"
+                                && previous_statuses
+                                    .get(&t.id)
+                                    .map(|prev| prev != "Finished")
+                                    .unwrap_or(false)
+                        })
+                        .map(|t| t.title.clone())
+                        .collect();
 
                     if self.tasks.is_empty() {
                         self.selected_task.select(None);
@@ -481,9 +522,17 @@ impl App {
                     }
 
                     self.update_info_counts();
+
+                    if !newly_finished.is_empty() {
+                        let message = if newly_finished.len() == 1 {
+                            format!("✓ {}", newly_finished[0])
+                        } else {
+                            format!("✓ {} tasks completed", newly_finished.len())
+                        };
+                        self.show_notification(message);
+                    }
                 }
                 Err(e) => {
-                    self.connection_status = ConnectionStatus::Disconnected;
                     self.show_popup(vec!["Failed to get tasks:".into(), e.to_string()], true);
                 }
             }
@@ -929,6 +978,35 @@ impl App {
         sorted
             .get(idx)
             .and_then(|task| self.tasks.iter().position(|t| t.id == task.id))
+    }
+
+    pub fn show_notification(&mut self, message: String) {
+        self.notification = Some(Notification {
+            message,
+            ticks_remaining: (4.0 * TICK_FPS) as u64, // visible for 4 seconds
+        });
+    }
+
+    pub async fn reload_config(&mut self) -> anyhow::Result<()> {
+        match crate::config::load_config() {
+            Ok(config) => {
+                self.destination = config.downloads.destination;
+                self.refresh_interval = config
+                    .downloads
+                    .refresh_interval
+                    .filter(|&s| s > 0)
+                    .map(|s| (s as f64 * TICK_FPS) as u64);
+                self.sort_column = SortColumn::from_str(&config.sorting.column);
+                self.sort_order = SortOrder::from_str(&config.sorting.order);
+                self.tick_count = 0; // reset so the new interval starts fresh
+
+                self.show_notification("✓ Config reloaded".to_string());
+            }
+            Err(e) => {
+                self.show_popup(vec!["Failed to reload config:".into(), e.to_string()], true);
+            }
+        }
+        Ok(())
     }
 }
 

@@ -59,6 +59,9 @@ pub enum AppEvent {
     CancelAction,
     /// Manual config reload
     ReloadConfig,
+    /// Filtering events
+    OpenFilter,
+    ApplyFilter,
 }
 
 /// Terminal event handler.

@@ -32,36 +32,44 @@ impl Widget for &mut App {
             ConnectionStatus::Connected => Span::styled(" ● ", Style::default().fg(Color::Green)),
             ConnectionStatus::Disconnected => Span::styled(" ● ", Style::default().fg(Color::Red)),
         };
+
         let spinner = SPINNER_FRAMES[self.spinner_frame];
-        let title_line = if self.loading {
-            Line::from(vec![
-                connection_indicator,
-                Span::styled(
-                    format!("{} DownloadStation TUI Client ", spinner),
-                    Style::default().fg(Color::Blue).bold(),
-                ),
-            ])
+
+        let mut title_spans = vec![connection_indicator];
+
+        if self.loading {
+            title_spans.push(Span::styled(
+                format!("{} DownloadStation TUI Client ", spinner),
+                Style::default().fg(Color::Blue).bold(),
+            ));
         } else {
             match self.refresh_interval {
-                Some(ticks) => Line::from(vec![
-                    connection_indicator,
-                    Span::styled(
+                Some(ticks) => {
+                    title_spans.push(Span::styled(
                         format!(
                             "DownloadStation TUI Client - [Auto-refresh: {}s] ",
                             ticks / 30
                         ),
                         Style::default().fg(Color::Blue).bold(),
-                    ),
-                ]),
-                None => Line::from(vec![
-                    connection_indicator,
-                    Span::styled(
+                    ));
+                }
+                None => {
+                    title_spans.push(Span::styled(
                         "DownloadStation TUI Client - [Auto-refresh: off] ",
                         Style::default().fg(Color::Blue).bold(),
-                    ),
-                ]),
+                    ));
+                }
             }
-        };
+        }
+
+        if !self.filter_text.is_empty() {
+            title_spans.push(Span::styled(
+                format!("[filter: {}] ", self.filter_text),
+                Style::default().fg(Color::Magenta),
+            ));
+        }
+
+        let title_line = Line::from(title_spans);
 
         let table_block = Block::bordered()
             .title(title_line)
@@ -314,6 +322,31 @@ impl Widget for &mut App {
             self.url_input_cursor_pos = Some((inner.x + input.visual_cursor() as u16, inner.y));
         } else {
             self.url_input_cursor_pos = None;
+        }
+
+        // Render filter input overlay, similar pattern to url_input
+        if let Some(input) = &self.filter_input {
+            let input_area = Rect {
+                x: area.x,
+                y: area.y + area.height - 3,
+                width: area.width,
+                height: 3,
+            };
+            Clear.render(input_area, buf);
+
+            let input_block = Block::bordered()
+                .title(" Filter tasks (Enter to apply · Esc to cancel) ")
+                .border_type(BorderType::Rounded)
+                .border_style(Style::default().fg(Color::Yellow));
+
+            let inner = input_block.inner(input_area);
+            input_block.render(input_area, buf);
+
+            Paragraph::new(input.value()).render(inner, buf);
+
+            self.filter_cursor_pos = Some((inner.x + input.visual_cursor() as u16, inner.y));
+        } else {
+            self.filter_cursor_pos = None;
         }
 
         // Popup

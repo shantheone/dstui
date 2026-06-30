@@ -94,8 +94,8 @@ pub struct App {
     pub file_count: usize,
     pub file_explorer: Option<FileExplorer>,
     pub url_input: Option<Input>,
-    pub popup: Option<PopupState>,
     pub url_input_cursor_pos: Option<(u16, u16)>,
+    pub popup: Option<PopupState>,
     // Tracking scrollable areas
     pub popup_inner_height: usize,
     pub tracker_inner_height: usize,
@@ -109,6 +109,10 @@ pub struct App {
     pub sort_order: SortOrder,
     pub connection_status: ConnectionStatus,
     pub notification: Option<Notification>,
+    // Filtering settins
+    pub filter_input: Option<Input>,
+    pub filter_text: String,
+    pub filter_cursor_pos: Option<(u16, u16)>,
 }
 
 fn move_next(state: &mut TableState, row_count: usize) {
@@ -206,6 +210,9 @@ impl App {
             sort_order,
             connection_status: ConnectionStatus::Connected,
             notification: None,
+            filter_input: None,
+            filter_text: String::new(),
+            filter_cursor_pos: None,
         };
 
         app.refresh_tasks().await?;
@@ -216,15 +223,10 @@ impl App {
         while self.running {
             terminal.draw(|frame| frame.render_widget(&mut self, frame.area()))?;
 
-            // Show blinking cursor when URL input is active, hide otherwise
-            if self.url_input.is_some() {
-                execute!(stdout(), cursor::Show, cursor::EnableBlinking)?;
-            } else {
-                execute!(stdout(), cursor::Hide)?;
-            }
-
-            if self.url_input.is_some() {
-                if let Some((x, y)) = self.url_input_cursor_pos {
+            // Show blinking cursor when URL input or filter is active, hide otherwise
+            if self.url_input.is_some() || self.filter_input.is_some() {
+                let pos = self.url_input_cursor_pos.or(self.filter_cursor_pos);
+                if let Some((x, y)) = pos {
                     execute!(
                         stdout(),
                         cursor::Show,
@@ -321,6 +323,8 @@ impl App {
                             "R         — reload config (only applies to destination, refresh and sort settings)".into(),
                             "1-9       — sort by column (again to reverse)".into(),
                             "Tab       — switch panels".into(),
+                            "/         — filter tasks by name".into(),
+                            "x         — clear active filter".into(),
                             "?         — toggle this help popup".into(),
                             "q / Esc   — quit".into(),
                             String::new(),
@@ -332,6 +336,8 @@ impl App {
                     AppEvent::ConfirmAction => self.confirm_action().await?,
                     AppEvent::CancelAction => self.cancel_action(),
                     AppEvent::ReloadConfig => self.reload_config().await?,
+                    AppEvent::OpenFilter => self.open_filter(),
+                    AppEvent::ApplyFilter => self.apply_filter(),
                 },
             }
         }
@@ -377,6 +383,20 @@ impl App {
                     explorer
                         .handle(&crossterm::event::Event::Key(key_event))
                         .unwrap();
+                }
+            }
+            return Ok(());
+        }
+
+        // Then we will handle the filtering input field
+        if self.filter_input.is_some() {
+            match key_event.code {
+                KeyCode::Enter => self.events.send(AppEvent::ApplyFilter),
+                KeyCode::Esc => self.filter_input = None,
+                _ => {
+                    if let Some(input) = &mut self.filter_input {
+                        input.handle_event(&crossterm::event::Event::Key(key_event));
+                    }
                 }
             }
             return Ok(());
@@ -433,6 +453,13 @@ impl App {
             KeyCode::Char('d') => self.events.send(AppEvent::DeleteTask),
             // Key for reloading config file manually
             KeyCode::Char('R') => self.events.send(AppEvent::ReloadConfig),
+            // Filtering shortcuts
+            KeyCode::Char('/') => self.events.send(AppEvent::OpenFilter),
+            KeyCode::Char('x')
+                if !self.filter_text.is_empty() && self.active_panel == ActivePanel::Tasks =>
+            {
+                self.clear_filter();
+            }
             // Keys for sorting the columns
             KeyCode::Char('1') => self.sort_by(SortColumn::Name),
             KeyCode::Char('2') => self.sort_by(SortColumn::Size),
@@ -885,7 +912,16 @@ impl App {
     }
 
     pub fn sorted_tasks(&self) -> Vec<&Task> {
-        let mut tasks: Vec<&Task> = self.tasks.iter().collect();
+        let mut tasks: Vec<&Task> = self
+            .tasks
+            .iter()
+            .filter(|t| {
+                self.filter_text.is_empty()
+                    || t.title
+                        .to_lowercase()
+                        .contains(&self.filter_text.to_lowercase())
+            })
+            .collect();
 
         tasks.sort_by(|a, b| {
             let ord = match self.sort_column {
@@ -1007,6 +1043,30 @@ impl App {
             }
         }
         Ok(())
+    }
+
+    // Filtering methods
+    pub fn open_filter(&mut self) {
+        let mut input = Input::default();
+        if !self.filter_text.is_empty() {
+            input = input.with_value(self.filter_text.clone());
+        }
+        self.filter_input = Some(input);
+    }
+
+    pub fn apply_filter(&mut self) {
+        if let Some(input) = &self.filter_input {
+            self.filter_text = input.value().to_string();
+        }
+        self.filter_input = None;
+        self.selected_task.select(Some(0));
+        self.reset_info_scroll();
+    }
+
+    pub fn clear_filter(&mut self) {
+        self.filter_text.clear();
+        self.filter_input = None;
+        self.selected_task.select(Some(0));
     }
 }
 
